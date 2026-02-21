@@ -9,6 +9,7 @@ extern "C" {
 
 /* Timings (in us) used in SPI communication. */
 #define T_CLOCK_ON_DELAY_US 300
+#define T_SRAD_DELAY_US     35
 
 /* Sensor registers (addresses) */
 #define PMW3610_REG_PRODUCT_ID 0x00
@@ -82,6 +83,10 @@ extern "C" {
 #define PMW3610_XY_H_POS 3
 #define PMW3610_SHUTTER_H_POS 5
 #define PMW3610_SHUTTER_L_POS 6
+
+/* Motion register bits */
+#define PMW3610_MOTION_MOT   BIT(7)
+#define PMW3610_MOTION_FAULT BIT(6)
 
 /* cpi/resolution range */
 #define PMW3610_MAX_CPI 3200
