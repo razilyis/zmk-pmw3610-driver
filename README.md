@@ -1,8 +1,18 @@
 # PMW3610 driver implementation for ZMK
 
+#### ⚠️ Notice: `dev-v0.3_against-runaway` branch differences vs `zmk-0.3`
+This branch (`dev-v0.3_against-runaway`) incorporates several critical stability and power-management fixes to prevent cursor runaway and device freezing issues present in the base `zmk-0.3` branch. Key improvements include:
+- **Robust Interrupt Handling**: Reverted to level-triggered interrupts (`GPIO_INT_LEVEL_ACTIVE`) to prevent missing motion events during interrupt disable periods.
+- **Fail-Safe Initialization (Anti-Bricking)**: Added a retry mechanism (up to 3 times) for SPI initialization. If it fails consecutively, it backs off for 10 seconds before restarting the async flow, preventing battery drain from infinite loops and permanent sensor bricking.
+- **Fault Recovery & Anti-Jump**: Unifies fault detection and explicitly clears accumulated motion (`dx`, `dy`) upon recovery to prevent unexpected cursor jumps (runaways) after waking up from a fault state.
+- **Proper IDLE Power Saving**: Fixed a bug where `force_awake_4ms_mode` would incorrectly keep the sensor at a 4ms rate even when ZMK enters the IDLE state. It now properly drops to the 8ms default rate during IDLE, saving battery life.
+
+---
+
 This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
 
 This driver had been tested on [my PMW3610 breakout board](https://github.com/badjeff/pmw3610-pcb).
+
 
 #### What is different to [inorichi's driver](https://github.com/inorichi/zmk-pmw3610-driver)
 - Compatible to be used on split peripheral shield.
