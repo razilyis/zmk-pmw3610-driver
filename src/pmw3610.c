@@ -64,6 +64,11 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(
 
 //////// Function definitions //////////
 
+static int pmw3610_read_reg(const struct device *dev, uint8_t addr,
+                            uint8_t *value);
+static int pmw3610_write_reg(const struct device *dev, uint8_t addr,
+                             uint8_t value);
+
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
                         uint8_t len) {
   const struct pixart_config *cfg = dev->config;
@@ -90,7 +95,16 @@ static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
   // driver overhead. Splitting it risks CS de-assertion which causes fatal
   // runaway tracking. We revert to a single spi_transceive_dt.
 
-  return spi_transceive_dt(&cfg->spi, &tx, &rx);
+  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                    PMW3610_SPI_CLOCK_CMD_ENABLE);
+  k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+
+  int err = spi_transceive_dt(&cfg->spi, &tx, &rx);
+
+  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                    PMW3610_SPI_CLOCK_CMD_DISABLE);
+
+  return err;
 }
 
 static int pmw3610_read_reg(const struct device *dev, uint8_t addr,
@@ -834,7 +848,10 @@ static int on_activity_state(const zmk_event_t *eh) {
 
   bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
   for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
-    pmw3610_set_performance(pmw3610_devs[i], enable);
+    struct pixart_data *data = pmw3610_devs[i]->data;
+    if (likely(data->ready)) {
+      pmw3610_set_performance(pmw3610_devs[i], enable);
+    }
   }
 
   return 0;
