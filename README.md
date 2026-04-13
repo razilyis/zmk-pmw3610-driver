@@ -87,6 +87,7 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
         spi-max-frequency = <2000000>;
         irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         cpi = <600>;
+        motion-threshold = <1>; /* optional: set 0 to disable drift filtering */
         // swap-xy; /* optional */
         // invert-x; /* optional */
         // invert-y; /* optional */

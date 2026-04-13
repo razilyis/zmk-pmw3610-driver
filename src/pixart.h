@@ -44,6 +44,7 @@ struct pixart_config {
   struct spi_dt_spec spi;
   struct gpio_dt_spec irq_gpio;
   uint16_t cpi;
+  uint16_t motion_threshold;
   bool swap_xy;
   bool inv_x;
   bool inv_y;

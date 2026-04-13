@@ -575,6 +575,11 @@ static int pmw3610_report_data(const struct device *dev) {
     LOG_WRN("Extreme motion delta detected (x:%d, y:%d), filtering", x, y);
     return 0;
   }
+  if (config->motion_threshold > 0 &&
+      abs(x) <= config->motion_threshold && abs(y) <= config->motion_threshold) {
+    LOG_DBG("Drift-sized motion delta filtered (x:%d, y:%d)", x, y);
+    return 0;
+  }
   LOG_DBG("x/y: %d/%d", x, y);
 
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
@@ -817,6 +822,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),                     \
       .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                         \
       .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                     \
+      .motion_threshold = DT_PROP(DT_DRV_INST(n), motion_threshold),           \
       .swap_xy = DT_PROP(DT_DRV_INST(n), swap_xy),                             \
       .inv_x = DT_PROP(DT_DRV_INST(n), invert_x),                              \
       .inv_y = DT_PROP(DT_DRV_INST(n), invert_y),                              \
