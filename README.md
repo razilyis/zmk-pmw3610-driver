@@ -20,6 +20,25 @@ Available DTS properties:
 
 Use `inertial-scroll-layers` when the same PMW3610 is a pointer on one layer and a scroll source on another. Specify layer numbers directly, for example `inertial-scroll-layers = <6 7>;`. Omit it when inertial scrolling should be allowed on all layers.
 
+You can also define a zero-parameter behavior to toggle inertial scrolling from a key:
+
+```dts
+/ {
+    behaviors {
+        pmw3610_inertia_toggle: pmw3610_inertia_toggle {
+            compatible = "zmk,behavior-pmw3610-inertia-toggle";
+            #binding-cells = <0>;
+        };
+    };
+};
+```
+
+Then place it in a keymap layer:
+
+```dts
+&pmw3610_inertia_toggle
+```
+
 ---
 
 This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
