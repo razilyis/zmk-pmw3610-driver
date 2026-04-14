@@ -1,106 +1,67 @@
-# PMW3610 driver implementation for ZMK
+# zmk-pmw3610-driver — Dev-v0.3_inertial-scroll-v2
 
-#### ⚠️ Notice: `dev-v0.3_against-runaway` branch differences vs `zmk-0.3`
-This branch (`dev-v0.3_against-runaway`) incorporates several critical stability and power-management fixes to prevent cursor runaway and device freezing issues present in the base `zmk-0.3` branch. Key improvements include:
-- **Robust Interrupt Handling**: Reverted to level-triggered interrupts (`GPIO_INT_LEVEL_ACTIVE`) to prevent missing motion events during interrupt disable periods.
-- **Fail-Safe Initialization (Anti-Bricking)**: Added a retry mechanism (up to 3 times) for SPI initialization. If it fails consecutively, it backs off for 10 seconds before restarting the async flow, preventing battery drain from infinite loops and permanent sensor bricking.
-- **Fault Recovery & Anti-Jump**: Unifies fault detection and explicitly clears accumulated motion (`dx`, `dy`) upon recovery to prevent unexpected cursor jumps (runaways) after waking up from a fault state.
-- **Proper IDLE Power Saving**: Fixed a bug where `force_awake_4ms_mode` would incorrectly keep the sensor at a 4ms rate even when ZMK enters the IDLE state. It now properly drops to the 8ms default rate during IDLE, saving battery life.
+## Credits & Respect
 
-#### `Dev-v0.3_inertial-scroll-v2` inertial scrolling
-This branch keeps the runaway/fault recovery fixes above and adds driver-side inertial scrolling for PMW3610 scroll layers.
+This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver).
 
-Available DTS properties:
-- `inertial-scroll`
-- `inertial-scroll-gain-pct`
-- `inertial-scroll-decay-pct`
-- `inertial-scroll-interval-ms`
-- `inertial-scroll-threshold`
-- `inertial-scroll-layers`
+badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad) and [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver) to create a well-structured PMW3610 driver for ZMK v0.3 — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. His work laid the foundation for trackball integration in ZMK, and this branch would not exist without it. Deep respect and gratitude to badjeff for his contributions to the community.
 
-Use `inertial-scroll-layers` when the same PMW3610 is a pointer on one layer and a scroll source on another. Specify layer numbers directly, for example `inertial-scroll-layers = <6 7>;`. Omit it when inertial scrolling should be allowed on all layers.
-
-You can also include the zero-parameter behavior to toggle inertial scrolling from a key:
-
-```dts
-#include <behaviors/pmw3610_inertia_toggle.dtsi>
-```
-
-Then place it in a keymap layer:
-
-```dts
-&pmw3610_inertia_toggle
-```
-
-The included behavior uses `compatible = "zmk,behavior-pmw3610-inertia-toggle"` and has no parameters. Pressing it toggles inertial scrolling for PMW3610 devices that support `inertial-scroll`.
-
-#### Note: keymap-editor compatibility
-
-[nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) does not support adding behaviors from external west modules through its UI. However, it will preserve any binding it does not recognize. As a workaround, assign `&pmw3610_inertia_toggle` to at least one key directly in your `.keymap` file. After that, keymap-editor will leave the binding intact and you can reassign it to other keys via the editor.
-
-```dts
-/* Example: assign to a key in layer 0 */
-&pmw3610_inertia_toggle
-```
+このブランチはその実装をベースに、以下の追加改良を加えたものです。
 
 ---
 
-This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
+## このブランチ (Dev-v0.3_inertial-scroll-v2) の概要
 
-This driver had been tested on [my PMW3610 breakout board](https://github.com/badjeff/pmw3610-pcb).
+### 安定性・電源管理の改善
 
+- **レベルトリガ割り込み**: エッジトリガではなくレベルトリガ (`GPIO_INT_LEVEL_ACTIVE`) を採用し、割り込み無効期間中のモーションイベント取りこぼしを防止。
+- **フェイルセーフ初期化**: SPI 初期化失敗時に最大3回リトライし、連続失敗時は 10 秒バックオフ後に初期化を最初からやり直す。電池切れや文鎮化を防止。
+- **FAULT リカバリ & ジャンプ防止**: FAULT 検知時に蓄積済みの移動量 (`dx`, `dy`) と慣性状態を破棄し、復帰後のカーソル暴走を防止。
+- **IDLE 省電力の修正**: `force_awake_4ms_mode` が IDLE 移行後も4ms レートを維持し続けるバグを修正。IDLE 時は正しく 8ms デフォルトレートに落ちて省電力動作する。
 
-#### What is different to [inorichi's driver](https://github.com/inorichi/zmk-pmw3610-driver)
-- Compatible to be used on split peripheral shield.
-- Replaced `CONFIG_PMW3610_ORIENTATION_*` with ~~`CONFIG_PMW3610_SWAP_XY` and `PMW3610_INVERT_*`~~ device tree node attributes `swap-xy;`, `invert-x;` and `invert-y;`. Then now, it can used on [leylabella](https://github.com/badjeff/leylabella), which has different sensor breakout pcb orientation on one device.
-- Moved `CONFIG_PMW3610_CPI` to device tree node `.dts/.overlay`. It is now allowed to setup diffeent config for multi-sensor on single shield. In case of building typical mouse shield, we use one movment sensor on bottom, and another sensor for scrolling on top. Those settings could be distinguishable.
-- Features for scroll-mode, snipe-mode, and auto-layer are no longer needed to be provided from sensor driver. Those settings is now configurable in keymap with layer-based `zmk,input-listener`, instead of setup static value in shield config files.
-- Seperating sampling rate and reporting rate. It reports accumulated XY axes displacement between data ready interrupts. You will still feeling lag and jumpy in noisy radio hell, but the cursor traction should being lossless, and predicable in exact terms.
-- Default to use power saving config. Applying shorter-than-default downshift time to PMW3610.
-- Deprecated manual *chip-select*. Refactored to use Zephyr's `spi_transceive_dt()`. That allow the sensor could be attacted to a shared SPI bus, works along with others SPI peripherals, such as display module.
+### ドライバーサイド慣性スクロール
 
-## Installation
+PMW3610 をスクロールデバイスとして使うレイヤーで、指を離した後もスクロールが慣性で継続する機能をドライバ側で実装しています。
 
-Include this project on ZMK's west manifest in `config/west.yml`:
+---
 
-```yml
+## インストール
+
+### 1. west.yml への追加
+
+`config/west.yml` に以下を追加します：
+
+```yaml
 manifest:
   remotes:
-    ...
-    # START #####
     - name: razilyis
       url-base: https://github.com/razilyis
-    # END #######
-    ...
   projects:
-    ...
-    # START #####
     - name: zmk-pmw3610-driver
       remote: razilyis
       revision: Dev-v0.3_inertial-scroll-v2
-    # END #######
-    ...
   self:
     path: config
 ```
 
-Update `board.overlay` adding the necessary bits (update the pins for your board accordingly):
+### 2. board overlay への追加
+
+`<board>.overlay` にセンサーの設定を追記します（ピン番号は基板に合わせて変更してください）：
 
 ```dts
 &pinctrl {
     spi0_default: spi0_default {
         group1 {
             psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
-                <NRF_PSEL(SPIM_MOSI, 0, 17)>,
-                <NRF_PSEL(SPIM_MISO, 0, 17)>;
+                    <NRF_PSEL(SPIM_MOSI, 0, 17)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 17)>;
         };
     };
-
     spi0_sleep: spi0_sleep {
         group1 {
             psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
-                <NRF_PSEL(SPIM_MOSI, 0, 17)>,
-                <NRF_PSEL(SPIM_MISO, 0, 17)>;
+                    <NRF_PSEL(SPIM_MOSI, 0, 17)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 17)>;
             low-power-enable;
         };
     };
@@ -123,55 +84,116 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
         spi-max-frequency = <2000000>;
         irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         cpi = <600>;
-        motion-threshold = <1>; /* optional: set 0 to disable drift filtering */
-        inertial-scroll; /* optional: enable driver-side scroll inertia */
-        inertial-scroll-layers = <6 7>; /* optional: only active on these layers */
-        inertial-scroll-gain-pct = <130>;
-        inertial-scroll-decay-pct = <99>;
-        inertial-scroll-interval-ms = <10>;
-        inertial-scroll-threshold = <4>;
-        // swap-xy; /* optional */
-        // invert-x; /* optional */
-        // invert-y; /* optional */
         evt-type = <INPUT_EV_REL>;
         x-input-code = <INPUT_REL_X>;
         y-input-code = <INPUT_REL_Y>;
 
-        force-awake;
-        /* keep the sensor awake while ZMK activity state is ACTIVE,
-           fallback to normal downshift mode after ZMK goes into IDLE / SLEEP mode.
-           thus, the sensor would be a `wakeup-source` */
+        /* ドリフトフィルタ: 0 で無効化 */
+        motion-threshold = <1>;
 
-        force-awake-4ms-mode;
-        /* while force-awake is acitvated, enable this mode to force sampling per 
-           4ms, where the default sampling rate is 8ms. */
-        /* NOTE: apply this mode if you need 250Hz with direct USB connection. */
+        /* 慣性スクロール（任意） */
+        inertial-scroll;
+        inertial-scroll-layers = <6 7>;   /* 有効にするレイヤー番号。省略時は全レイヤーで有効 */
+        inertial-scroll-gain-pct = <130>;
+        inertial-scroll-decay-pct = <99>;
+        inertial-scroll-interval-ms = <10>;
+        inertial-scroll-threshold = <4>;
+
+        /* 省電力制御（任意） */
+        force-awake;          /* ACTIVE 時はセンサーを常時起動 */
+        force-awake-4ms-mode; /* ACTIVE 時に 4ms サンプリングを強制（USB 接続で 250Hz が必要な場合） */
+
+        // swap-xy;   /* 任意: XY 軸の入れ替え */
+        // invert-x;  /* 任意: X 軸の反転 */
+        // invert-y;  /* 任意: Y 軸の反転 */
     };
 };
 
 / {
-  trackball_listener {
-    compatible = "zmk,input-listener";
-    device = <&trackball>;
-  };
+    trackball_listener {
+        compatible = "zmk,input-listener";
+        device = <&trackball>;
+    };
 };
 ```
 
-Enable the driver config in `<shield>.config` file (read the Kconfig file to find out all possible options):
+### 3. shield config への追加
+
+`<shield>.conf` に以下を追記します：
 
 ```conf
 CONFIG_SPI=y
 CONFIG_INPUT=y
 CONFIG_ZMK_POINTING=y
 CONFIG_PMW3610=y
-# CONFIG_PMW3610_SWAP_XY=y // <-- deprecated, use swap-xy; instead
-# CONFIG_PMW3610_INVERT_X=y // <-- deprecated, use invert-x; instead
-# CONFIG_PMW3610_INVERT_Y=y // <-- deprecated, use invert-y; instead
-# CONFIG_PMW3610_REPORT_INTERVAL_MIN=12
-# CONFIG_PMW3610_LOG_LEVEL_DBG=y
-# CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=300 // <--see Troubleshooting
+# CONFIG_PMW3610_REPORT_INTERVAL_MIN=12  # 任意: 最小レポート間隔 (ms)
+# CONFIG_PMW3610_LOG_LEVEL_DBG=y         # 任意: デバッグログ
+# CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=300  # トラブルシューティング参照
 ```
 
-## Troubleshooting
+---
 
-If you are getting `Incorrect product id 0xFF (expecting 0x3E)!` on `nice_nano_v2` board from the log, you'd want to apply `CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=1000` in your shield .conf/.overlay file. Due to this driver doesn't offer module dependancy setting, that would ensure external power (to enable VCC pin on board) is ready, the `CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS` would use to add extra one second delay of power up.
+## DTS プロパティ一覧
+
+### 基本設定
+
+| プロパティ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `irq-gpios` | phandle-array | (必須) | モーション割り込み GPIO |
+| `cpi` | int | 600 | カウント/インチ（200〜3200、ステップ 200） |
+| `evt-type` | int | (必須) | 入力イベント種別（`INPUT_EV_REL` など） |
+| `x-input-code` | int | (必須) | X 軸の入力コード |
+| `y-input-code` | int | (必須) | Y 軸の入力コード |
+| `motion-threshold` | int | 1 | ドリフトフィルタ閾値。絶対値がこの値以下の XY デルタを破棄。`0` で無効 |
+| `swap-xy` | boolean | — | XY 軸を入れ替える |
+| `invert-x` | boolean | — | X 軸を反転する |
+| `invert-y` | boolean | — | Y 軸を反転する |
+
+### 省電力制御
+
+| プロパティ | 型 | 説明 |
+|---|---|---|
+| `force-awake` | boolean | ZMK が ACTIVE 状態の間センサーを常時起動。IDLE/SLEEP 移行後は通常のダウンシフトに戻る |
+| `force-awake-4ms-mode` | boolean | `force-awake` 有効時に 4ms サンプリング（250Hz）を強制。USB 直結で高レートが必要な場合に使用 |
+
+### 慣性スクロール
+
+| プロパティ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `inertial-scroll` | boolean | — | 慣性スクロールを有効化する |
+| `inertial-scroll-gain-pct` | int | 130 | 物理スクロール量から慣性初速を生成する際のゲイン（%）。大きいほど速くなる |
+| `inertial-scroll-decay-pct` | int | 99 | 毎 tick の速度減衰率（%）。小さいほど早く止まる |
+| `inertial-scroll-interval-ms` | int | 10 | 慣性スクロールの合成レポート間隔（ms） |
+| `inertial-scroll-threshold` | int | 4 | 慣性スクロールを停止する速度閾値（Q8 固定小数点単位） |
+| `inertial-scroll-layers` | array | — | 慣性スクロールを有効にするレイヤー番号のリスト。省略時は全レイヤーで有効 |
+
+`inertial-scroll-layers` は、同じ PMW3610 をポインタとスクロールで兼用する場合に使います。スクロールレイヤーの番号だけを指定してください：
+
+```dts
+inertial-scroll-layers = <6 7>;
+```
+
+---
+
+## 慣性スクロールのトグルキー
+
+キーマップから慣性スクロールをオン/オフするゼロパラメータのビヘイビアを利用できます。
+
+`.keymap` ファイルに以下を追加します：
+
+```dts
+#include <behaviors/pmw3610_inertia_toggle.dtsi>
+```
+
+任意のレイヤーのキーに割り当てます：
+
+```dts
+&pmw3610_inertia_toggle
+```
+
+### keymap-editor をお使いの場合
+
+[nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) は外部 west モジュールのビヘイビアをUI経由で追加できません。ただし、既に `.keymap` に記載されているバインディングはそのまま保持されます。
+
+**ワークアラウンド**: 先に `.keymap` ファイルを手書きで編集して `&pmw3610_inertia_toggle` を1か所以上割り当ててください。以降は keymap-editor でそのキーを別のキーと入れ替える形で操作できます。
+
