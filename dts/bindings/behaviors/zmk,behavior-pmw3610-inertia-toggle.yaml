@@ -5,6 +5,4 @@ description: PMW3610 inertial scroll toggle behavior
 
 compatible: "zmk,behavior-pmw3610-inertia-toggle"
 
-display-name: "Inertia Toggle"
-
 include: zero_param.yaml
