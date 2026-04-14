@@ -92,12 +92,19 @@ extern "C" {
 #define PMW3610_MAX_CPI 3200
 #define PMW3610_MIN_CPI 200
 
+/* inertial scroll fixed-point scale */
+#define PMW3610_INERTIA_SCALE 256
+
 /* write command bit position */
 #define SPI_WRITE_BIT BIT(7)
 
 /* Helper macros used to convert sensor values. */
 #define PMW3610_SVALUE_TO_CPI(svalue) ((uint32_t)(svalue).val1)
 #define PMW3610_SVALUE_TO_TIME(svalue) ((uint32_t)(svalue).val1)
+
+bool pmw3610_inertial_scroll_is_enabled(const struct device *dev);
+int pmw3610_set_inertial_scroll_enabled(const struct device *dev, bool enabled);
+void pmw3610_toggle_inertial_scroll_all(void);
 
 /** @brief Sensor specific attributes of PMW3610. */
 enum pmw3610_attribute {

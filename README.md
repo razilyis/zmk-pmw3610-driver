@@ -7,6 +7,19 @@ This branch (`dev-v0.3_against-runaway`) incorporates several critical stability
 - **Fault Recovery & Anti-Jump**: Unifies fault detection and explicitly clears accumulated motion (`dx`, `dy`) upon recovery to prevent unexpected cursor jumps (runaways) after waking up from a fault state.
 - **Proper IDLE Power Saving**: Fixed a bug where `force_awake_4ms_mode` would incorrectly keep the sensor at a 4ms rate even when ZMK enters the IDLE state. It now properly drops to the 8ms default rate during IDLE, saving battery life.
 
+#### `Dev-v0.3_inertial-scroll-v2` inertial scrolling
+This branch keeps the runaway/fault recovery fixes above and adds driver-side inertial scrolling for PMW3610 scroll layers.
+
+Available DTS properties:
+- `inertial-scroll`
+- `inertial-scroll-gain-pct`
+- `inertial-scroll-decay-pct`
+- `inertial-scroll-interval-ms`
+- `inertial-scroll-threshold`
+- `inertial-scroll-layers`
+
+Use `inertial-scroll-layers` when the same PMW3610 is a pointer on one layer and a scroll source on another. Specify layer numbers directly, for example `inertial-scroll-layers = <6 7>;`. Omit it when inertial scrolling should be allowed on all layers.
+
 ---
 
 This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
@@ -32,16 +45,16 @@ manifest:
   remotes:
     ...
     # START #####
-    - name: badjeff
-      url-base: https://github.com/badjeff
+    - name: razilyis
+      url-base: https://github.com/razilyis
     # END #######
     ...
   projects:
     ...
     # START #####
     - name: zmk-pmw3610-driver
-      remote: badjeff
-      revision: main
+      remote: razilyis
+      revision: Dev-v0.3_inertial-scroll-v2
     # END #######
     ...
   self:
@@ -88,6 +101,12 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
         irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         cpi = <600>;
         motion-threshold = <1>; /* optional: set 0 to disable drift filtering */
+        inertial-scroll; /* optional: enable driver-side scroll inertia */
+        inertial-scroll-layers = <6 7>; /* optional: only active on these layers */
+        inertial-scroll-gain-pct = <130>;
+        inertial-scroll-decay-pct = <99>;
+        inertial-scroll-interval-ms = <10>;
+        inertial-scroll-threshold = <4>;
         // swap-xy; /* optional */
         // invert-x; /* optional */
         // invert-y; /* optional */

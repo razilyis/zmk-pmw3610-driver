@@ -38,3 +38,25 @@ properties:
     type: boolean
   force-awake-4ms-mode:
     type: boolean
+  inertial-scroll:
+    type: boolean
+    description: "Enable inertial scrolling when this sensor is configured as a scroll device."
+  inertial-scroll-decay-pct:
+    type: int
+    default: 99
+    description: "Velocity decay percentage applied on each inertial tick."
+  inertial-scroll-interval-ms:
+    type: int
+    default: 10
+    description: "Interval in milliseconds for synthetic inertial scroll reports."
+  inertial-scroll-threshold:
+    type: int
+    default: 4
+    description: "Minimum fixed-point velocity threshold before inertial scrolling stops."
+  inertial-scroll-gain-pct:
+    type: int
+    default: 130
+    description: "Gain percentage used to derive inertial velocity from the latest physical scroll delta."
+  inertial-scroll-layers:
+    type: array
+    description: "List of active ZMK layer numbers where inertial scrolling is allowed. Omit this property to allow all layers."

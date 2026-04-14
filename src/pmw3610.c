@@ -11,6 +11,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/util_macro.h>
 #include <zmk/events/activity_state_changed.h>
 #include <zmk/keymap.h>
 
@@ -53,6 +54,7 @@ static int pmw3610_async_init_power_up(const struct device *dev);
 static int pmw3610_async_init_clear_ob1(const struct device *dev);
 static int pmw3610_async_init_check_ob1(const struct device *dev);
 static int pmw3610_async_init_configure(const struct device *dev);
+static void pmw3610_inertia_work_callback(struct k_work *work);
 
 static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(
     const struct device *dev) = {
@@ -68,6 +70,121 @@ static int pmw3610_read_reg(const struct device *dev, uint8_t addr,
                             uint8_t *value);
 static int pmw3610_write_reg(const struct device *dev, uint8_t addr,
                              uint8_t value);
+
+static bool pmw3610_supports_inertia(const struct device *dev) {
+  const struct pixart_config *config = dev->config;
+
+  return config->inertial_scroll;
+}
+
+static int32_t pmw3610_abs32(int32_t value) {
+  return value < 0 ? -value : value;
+}
+
+static bool pmw3610_inertial_layer_active(const struct pixart_config *config) {
+  if (config->inertial_scroll_layer_count == 0) {
+    return true;
+  }
+
+#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+  for (size_t i = 0; i < config->inertial_scroll_layer_count; i++) {
+    if (zmk_keymap_layer_active(config->inertial_scroll_layers[i])) {
+      return true;
+    }
+  }
+#endif
+
+  return false;
+}
+
+static void pmw3610_stop_inertia(struct pixart_data *data) {
+  k_work_cancel_delayable(&data->inertia_work);
+  data->inertia_vx_q8 = 0;
+  data->inertia_vy_q8 = 0;
+  data->inertia_rx_q8 = 0;
+  data->inertia_ry_q8 = 0;
+}
+
+static void pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
+  const struct pixart_config *config = dev->config;
+  bool have_x = x != 0;
+  bool have_y = y != 0;
+
+  if (!have_x && !have_y) {
+    return;
+  }
+
+  if (have_x) {
+    input_report(dev, config->evt_type, config->x_input_code, x, !have_y,
+                 K_NO_WAIT);
+  }
+  if (have_y) {
+    input_report(dev, config->evt_type, config->y_input_code, y, true,
+                 K_NO_WAIT);
+  }
+}
+
+static int16_t pmw3610_q8_to_step(int32_t *remainder_q8,
+                                  int32_t velocity_q8) {
+  int32_t total_q8 = *remainder_q8 + velocity_q8;
+  int32_t step = total_q8 / PMW3610_INERTIA_SCALE;
+
+  *remainder_q8 = total_q8 - (step * PMW3610_INERTIA_SCALE);
+  return (int16_t)CLAMP(step, INT16_MIN, INT16_MAX);
+}
+
+static bool pmw3610_inertia_active(const struct pixart_data *data,
+                                   const struct pixart_config *config) {
+  return pmw3610_abs32(data->inertia_vx_q8) >=
+             config->inertial_scroll_threshold ||
+         pmw3610_abs32(data->inertia_vy_q8) >=
+             config->inertial_scroll_threshold ||
+         pmw3610_abs32(data->inertia_rx_q8) >= PMW3610_INERTIA_SCALE ||
+         pmw3610_abs32(data->inertia_ry_q8) >= PMW3610_INERTIA_SCALE;
+}
+
+static void pmw3610_schedule_inertia(struct pixart_data *data,
+                                     const struct pixart_config *config) {
+  k_work_reschedule(&data->inertia_work,
+                    K_MSEC(config->inertial_scroll_interval_ms));
+}
+
+static void pmw3610_update_inertia_from_motion(
+    struct pixart_data *data, const struct pixart_config *config, int16_t rx,
+    int16_t ry) {
+  data->inertia_vx_q8 =
+      (rx * config->inertial_scroll_gain_pct * PMW3610_INERTIA_SCALE) / 100;
+  data->inertia_vy_q8 =
+      (ry * config->inertial_scroll_gain_pct * PMW3610_INERTIA_SCALE) / 100;
+
+  if (pmw3610_inertia_active(data, config)) {
+    pmw3610_schedule_inertia(data, config);
+  }
+}
+
+bool pmw3610_inertial_scroll_is_enabled(const struct device *dev) {
+  struct pixart_data *data = dev->data;
+  const struct pixart_config *config = dev->config;
+
+  return pmw3610_supports_inertia(dev) && data->inertial_scroll_enabled &&
+         pmw3610_inertial_layer_active(config);
+}
+
+int pmw3610_set_inertial_scroll_enabled(const struct device *dev,
+                                        bool enabled) {
+  struct pixart_data *data = dev->data;
+
+  if (!pmw3610_supports_inertia(dev) && enabled) {
+    return -ENOTSUP;
+  }
+
+  data->inertial_scroll_enabled = enabled && pmw3610_supports_inertia(dev);
+  if (!data->inertial_scroll_enabled) {
+    pmw3610_stop_inertia(data);
+  }
+
+  return 0;
+}
 
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
                         uint8_t len) {
@@ -544,6 +661,7 @@ static int pmw3610_report_data(const struct device *dev) {
     // Clear accumulated motion to prevent cursor jumps after recovery
     data->dx = 0;
     data->dy = 0;
+    pmw3610_stop_inertia(data);
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
     data->last_smp_time = 0;
     data->last_rpt_time = 0;
@@ -628,13 +746,14 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
     data->dx = 0;
     data->dy = 0;
-    if (have_x) {
-      input_report(dev, config->evt_type, config->x_input_code, rx, !have_y,
-                   K_NO_WAIT);
+    if (pmw3610_inertial_scroll_is_enabled(dev)) {
+      pmw3610_stop_inertia(data);
     }
-    if (have_y) {
-      input_report(dev, config->evt_type, config->y_input_code, ry, true,
-                   K_NO_WAIT);
+
+    pmw3610_emit_input(dev, rx, ry);
+
+    if (pmw3610_inertial_scroll_is_enabled(dev)) {
+      pmw3610_update_inertia_from_motion(data, config, rx, ry);
     }
   }
 
@@ -661,6 +780,35 @@ static void pmw3610_work_callback(struct k_work *work) {
   // sequence.
   if (data->ready) {
     pmw3610_set_interrupt(dev, true);
+  }
+}
+
+static void pmw3610_inertia_work_callback(struct k_work *work) {
+  struct k_work_delayable *delayable = (struct k_work_delayable *)work;
+  struct pixart_data *data =
+      CONTAINER_OF(delayable, struct pixart_data, inertia_work);
+  const struct device *dev = data->dev;
+  const struct pixart_config *config = dev->config;
+
+  if (!pmw3610_inertial_scroll_is_enabled(dev)) {
+    pmw3610_stop_inertia(data);
+    return;
+  }
+
+  data->inertia_vx_q8 =
+      (data->inertia_vx_q8 * config->inertial_scroll_decay_pct) / 100;
+  data->inertia_vy_q8 =
+      (data->inertia_vy_q8 * config->inertial_scroll_decay_pct) / 100;
+
+  int16_t sx = pmw3610_q8_to_step(&data->inertia_rx_q8, data->inertia_vx_q8);
+  int16_t sy = pmw3610_q8_to_step(&data->inertia_ry_q8, data->inertia_vy_q8);
+
+  pmw3610_emit_input(dev, sx, sy);
+
+  if (pmw3610_inertia_active(data, config)) {
+    pmw3610_schedule_inertia(data, config);
+  } else {
+    pmw3610_stop_inertia(data);
   }
 }
 
@@ -709,9 +857,15 @@ static int pmw3610_init(const struct device *dev) {
 
   // init smart algorithm flag;
   data->sw_smart_flag = false;
+  data->inertial_scroll_enabled = pmw3610_supports_inertia(dev);
+  data->inertia_vx_q8 = 0;
+  data->inertia_vy_q8 = 0;
+  data->inertia_rx_q8 = 0;
+  data->inertia_ry_q8 = 0;
 
   // init trigger handler work
   k_work_init(&data->trigger_work, pmw3610_work_callback);
+  k_work_init_delayable(&data->inertia_work, pmw3610_inertia_work_callback);
 
   // init irq routine
   err = pmw3610_init_irq(dev);
@@ -816,7 +970,22 @@ static const struct sensor_driver_api pmw3610_driver_api = {
   (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | SPI_MODE_CPHA |      \
    SPI_TRANSFER_MSB)
 
+#define PMW3610_DECLARE_INERTIAL_LAYERS(n)                                     \
+  COND_CODE_1(DT_NODE_HAS_PROP(DT_DRV_INST(n), inertial_scroll_layers),        \
+              (static const uint8_t inertial_scroll_layers_##n[] =             \
+                   DT_PROP(DT_DRV_INST(n), inertial_scroll_layers);),          \
+              ())
+
+#define PMW3610_INIT_INERTIAL_LAYERS(n)                                        \
+  COND_CODE_1(DT_NODE_HAS_PROP(DT_DRV_INST(n), inertial_scroll_layers),        \
+              (.inertial_scroll_layers = inertial_scroll_layers_##n,           \
+               .inertial_scroll_layer_count =                                  \
+                   ARRAY_SIZE(inertial_scroll_layers_##n),),                   \
+              (.inertial_scroll_layers = NULL,                                 \
+               .inertial_scroll_layer_count = 0,))
+
 #define PMW3610_DEFINE(n)                                                      \
+  PMW3610_DECLARE_INERTIAL_LAYERS(n)                                           \
   static struct pixart_data data##n;                                           \
   static const struct pixart_config config##n = {                              \
       .spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),                     \
@@ -831,6 +1000,16 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                   \
       .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                     \
       .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),   \
+      .inertial_scroll = DT_PROP(DT_DRV_INST(n), inertial_scroll),             \
+      .inertial_scroll_decay_pct =                                             \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct),                  \
+      .inertial_scroll_interval_ms =                                           \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_interval_ms),                \
+      .inertial_scroll_threshold =                                             \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_threshold),                  \
+      .inertial_scroll_gain_pct =                                              \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_gain_pct),                   \
+      PMW3610_INIT_INERTIAL_LAYERS(n)                                          \
   };                                                                           \
   DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n,           \
                         POST_KERNEL, CONFIG_INPUT_PMW3610_INIT_PRIORITY,       \
@@ -842,6 +1021,19 @@ DT_INST_FOREACH_STATUS_OKAY(PMW3610_DEFINE)
 
 static const struct device *pmw3610_devs[] = {
     DT_FOREACH_STATUS_OKAY(pixart_pmw3610, GET_PMW3610_DEV)};
+
+void pmw3610_toggle_inertial_scroll_all(void) {
+  for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+    const struct device *dev = pmw3610_devs[i];
+    struct pixart_data *data = dev->data;
+
+    if (!pmw3610_supports_inertia(dev)) {
+      continue;
+    }
+
+    pmw3610_set_inertial_scroll_enabled(dev, !data->inertial_scroll_enabled);
+  }
+}
 
 static int on_activity_state(const zmk_event_t *eh) {
   struct zmk_activity_state_changed *state_ev =

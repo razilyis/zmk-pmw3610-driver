@@ -10,6 +10,8 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/spi.h>
+#include <zephyr/kernel.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,11 +31,17 @@ struct pixart_data {
 
   struct gpio_callback irq_gpio_cb; // motion pin irq callback
   struct k_work trigger_work;       // realtrigger job
+  struct k_work_delayable inertia_work; // delayed inertial scroll job
 
   struct k_work_delayable
       init_work; // the work structure for delayable init steps
   int async_init_step;
   uint8_t init_retries; // counter for async init retries
+  int32_t inertia_vx_q8;
+  int32_t inertia_vy_q8;
+  int32_t inertia_rx_q8;
+  int32_t inertia_ry_q8;
+  bool inertial_scroll_enabled;
 
   bool ready; // whether init is finished successfully
   int err;    // error code during async init
@@ -53,6 +61,13 @@ struct pixart_config {
   uint8_t y_input_code;
   bool force_awake;
   bool force_awake_4ms_mode;
+  bool inertial_scroll;
+  uint16_t inertial_scroll_decay_pct;
+  uint16_t inertial_scroll_interval_ms;
+  uint16_t inertial_scroll_threshold;
+  uint16_t inertial_scroll_gain_pct;
+  const uint8_t *inertial_scroll_layers;
+  size_t inertial_scroll_layer_count;
 };
 
 #ifdef __cplusplus
