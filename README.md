@@ -34,6 +34,15 @@ Then place it in a keymap layer:
 
 The included behavior uses `compatible = "zmk,behavior-pmw3610-inertia-toggle"` and has no parameters. Pressing it toggles inertial scrolling for PMW3610 devices that support `inertial-scroll`.
 
+#### Note: keymap-editor compatibility
+
+[nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) does not support adding behaviors from external west modules through its UI. However, it will preserve any binding it does not recognize. As a workaround, assign `&pmw3610_inertia_toggle` to at least one key directly in your `.keymap` file. After that, keymap-editor will leave the binding intact and you can reassign it to other keys via the editor.
+
+```dts
+/* Example: assign to a key in layer 0 */
+&pmw3610_inertia_toggle
+```
+
 ---
 
 This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
