@@ -805,18 +805,17 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
 
   pmw3610_emit_input(dev, sx, sy);
 
-  // Stop if velocity is below threshold (original condition).
-  // Also stop if this tick produced no output AND the next tick's accumulated
-  // total (remainder + decayed velocity) also cannot produce a step — this
-  // prevents the sparse, jerky single-step bursts at the tail of a fling.
-  bool will_step =
-      (sx != 0 || sy != 0) ||
-      (pmw3610_abs32(data->inertia_rx_q8 + data->inertia_vx_q8) >=
-       PMW3610_INERTIA_SCALE) ||
-      (pmw3610_abs32(data->inertia_ry_q8 + data->inertia_vy_q8) >=
-       PMW3610_INERTIA_SCALE);
+  // Continue only while velocity is in the smooth zone (>= 1 step per tick),
+  // or while we actually emitted a step this tick from accumulated remainder.
+  // Once velocity drops below PMW3610_INERTIA_SCALE the output alternates
+  // between 0 and 1 steps per tick, which feels jerky. Stopping as soon as
+  // a tick produces no output cleanly ends the scroll without that jitter.
+  bool smooth_or_stepped =
+      (pmw3610_abs32(data->inertia_vx_q8) >= PMW3610_INERTIA_SCALE ||
+       pmw3610_abs32(data->inertia_vy_q8) >= PMW3610_INERTIA_SCALE ||
+       sx != 0 || sy != 0);
 
-  if (pmw3610_inertia_active(data, config) && will_step) {
+  if (pmw3610_inertia_active(data, config) && smooth_or_stepped) {
     pmw3610_schedule_inertia(data, config);
   } else {
     pmw3610_stop_inertia(data);
