@@ -94,6 +94,9 @@ extern "C" {
 
 /* inertial scroll fixed-point scale */
 #define PMW3610_INERTIA_SCALE 256
+#define PMW3610_INERTIA_GESTURE_TIMEOUT_MS 80
+#define PMW3610_INERTIA_ATTACK_PREVIOUS_PCT 25
+#define PMW3610_INERTIA_RELEASE_PREVIOUS_PCT 80
 
 /* write command bit position */
 #define SPI_WRITE_BIT BIT(7)

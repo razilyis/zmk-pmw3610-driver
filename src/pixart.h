@@ -41,6 +41,9 @@ struct pixart_data {
   int32_t inertia_vy_q8;
   int32_t inertia_rx_q8;
   int32_t inertia_ry_q8;
+  int32_t gesture_vx_q8;
+  int32_t gesture_vy_q8;
+  int64_t gesture_last_motion_ms;
   bool inertial_scroll_enabled;
   bool vertical_scroll_inverted;
 

@@ -105,6 +105,37 @@ static void pmw3610_stop_inertia(struct pixart_data *data) {
   data->inertia_ry_q8 = 0;
 }
 
+static void pmw3610_reset_gesture_velocity(struct pixart_data *data) {
+  data->gesture_vx_q8 = 0;
+  data->gesture_vy_q8 = 0;
+  data->gesture_last_motion_ms = 0;
+}
+
+static int32_t pmw3610_filter_gesture_velocity(int32_t previous_q8,
+                                               int32_t sample_q8) {
+  if (previous_q8 == 0) {
+    return sample_q8;
+  }
+
+  if ((previous_q8 < 0) != (sample_q8 < 0) && sample_q8 != 0) {
+    return sample_q8;
+  }
+
+  /*
+   * Track acceleration quickly, but release a captured flick velocity slowly.
+   * This avoids basing momentum solely on the final, naturally slower sample
+   * while keeping gentle movements gentle.
+   */
+  int32_t previous_pct =
+      pmw3610_abs32(sample_q8) >= pmw3610_abs32(previous_q8)
+          ? PMW3610_INERTIA_ATTACK_PREVIOUS_PCT
+          : PMW3610_INERTIA_RELEASE_PREVIOUS_PCT;
+
+  return (int32_t)(((int64_t)previous_q8 * previous_pct +
+                    (int64_t)sample_q8 * (100 - previous_pct)) /
+                   100);
+}
+
 static void pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
   const struct pixart_config *config = dev->config;
   bool have_x = x != 0;
@@ -152,10 +183,27 @@ static void pmw3610_schedule_inertia(struct pixart_data *data,
 static void pmw3610_update_inertia_from_motion(
     struct pixart_data *data, const struct pixart_config *config, int16_t rx,
     int16_t ry) {
+  int64_t now = k_uptime_get();
+  if (data->gesture_last_motion_ms == 0 ||
+      now - data->gesture_last_motion_ms >
+          PMW3610_INERTIA_GESTURE_TIMEOUT_MS) {
+    pmw3610_reset_gesture_velocity(data);
+  }
+
+  data->gesture_vx_q8 = pmw3610_filter_gesture_velocity(
+      data->gesture_vx_q8, (int32_t)rx * PMW3610_INERTIA_SCALE);
+  data->gesture_vy_q8 = pmw3610_filter_gesture_velocity(
+      data->gesture_vy_q8, (int32_t)ry * PMW3610_INERTIA_SCALE);
+  data->gesture_last_motion_ms = now;
+
   data->inertia_vx_q8 =
-      (rx * config->inertial_scroll_gain_pct * PMW3610_INERTIA_SCALE) / 100;
+      (int32_t)(((int64_t)data->gesture_vx_q8 *
+                 config->inertial_scroll_gain_pct) /
+                100);
   data->inertia_vy_q8 =
-      (ry * config->inertial_scroll_gain_pct * PMW3610_INERTIA_SCALE) / 100;
+      (int32_t)(((int64_t)data->gesture_vy_q8 *
+                 config->inertial_scroll_gain_pct) /
+                100);
 
   if (pmw3610_inertia_active(data, config)) {
     pmw3610_schedule_inertia(data, config);
@@ -181,6 +229,7 @@ int pmw3610_set_inertial_scroll_enabled(const struct device *dev,
   data->inertial_scroll_enabled = enabled && pmw3610_supports_inertia(dev);
   if (!data->inertial_scroll_enabled) {
     pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
   }
 
   return 0;
@@ -837,6 +886,7 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
     pmw3610_schedule_inertia(data, config);
   } else {
     pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
   }
 }
 
@@ -890,6 +940,9 @@ static int pmw3610_init(const struct device *dev) {
   data->inertia_vy_q8 = 0;
   data->inertia_rx_q8 = 0;
   data->inertia_ry_q8 = 0;
+  data->gesture_vx_q8 = 0;
+  data->gesture_vy_q8 = 0;
+  data->gesture_last_motion_ms = 0;
   data->vertical_scroll_inverted = false;
 
   // init trigger handler work
