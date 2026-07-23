@@ -802,7 +802,11 @@ static int pmw3610_report_data(const struct device *dev) {
   int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
   int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
   if (pmw3610_vertical_scroll_direction_is_inverted(dev)) {
-    ry = ry == INT16_MIN ? INT16_MAX : -ry;
+    if (config->vertical_scroll_uses_x_axis) {
+      rx = rx == INT16_MIN ? INT16_MAX : -rx;
+    } else {
+      ry = ry == INT16_MIN ? INT16_MAX : -ry;
+    }
   }
   bool have_x = rx != 0;
   bool have_y = ry != 0;
@@ -1091,6 +1095,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
           DT_PROP(DT_DRV_INST(n), inertial_scroll_threshold),                  \
       .inertial_scroll_gain_pct =                                              \
           DT_PROP(DT_DRV_INST(n), inertial_scroll_gain_pct),                   \
+      .vertical_scroll_uses_x_axis =                                           \
+          DT_PROP(DT_DRV_INST(n), vertical_scroll_uses_x_axis),                 \
       PMW3610_INIT_INERTIAL_LAYERS(n)                                          \
   };                                                                           \
   DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n,           \

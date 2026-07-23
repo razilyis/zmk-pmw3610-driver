@@ -60,3 +60,6 @@ properties:
   inertial-scroll-layers:
     type: array
     description: "List of active ZMK layer numbers where inertial scrolling is allowed. Omit this property to allow all layers."
+  vertical-scroll-uses-x-axis:
+    type: boolean
+    description: "Treat the sensor X axis as vertical scroll for direction toggling. Use for sensors mounted with a 90-degree rotation."

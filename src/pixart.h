@@ -70,6 +70,7 @@ struct pixart_config {
   uint16_t inertial_scroll_interval_ms;
   uint16_t inertial_scroll_threshold;
   uint16_t inertial_scroll_gain_pct;
+  bool vertical_scroll_uses_x_axis;
   const uint8_t *inertial_scroll_layers;
   size_t inertial_scroll_layer_count;
 };
