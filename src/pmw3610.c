@@ -189,39 +189,46 @@ int pmw3610_set_inertial_scroll_enabled(const struct device *dev,
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
                         uint8_t len) {
   const struct pixart_config *cfg = dev->config;
+  struct spi_config read_config = cfg->spi.config;
   const struct spi_buf tx_buf = {.buf = &addr, .len = sizeof(addr)};
   const struct spi_buf_set tx = {.buffers = &tx_buf, .count = 1};
-  struct spi_buf rx_buf[] = {
-      {
-          .buf = NULL,
-          .len = sizeof(addr),
-      },
-      {
-          .buf = value,
-          .len = len,
-      },
-  };
-  const struct spi_buf_set rx = {.buffers = rx_buf,
-                                 .count = ARRAY_SIZE(rx_buf)};
+  struct spi_buf rx_buf = {.buf = value, .len = len};
+  const struct spi_buf_set rx = {.buffers = &rx_buf, .count = 1};
 
-  // Zephyr's SPI API without SPI_HOLD_ON_CS does not guarantee CS is kept low
-  // between separate write and read calls. Thus, we MUST use a single
-  // transceive operation where the first byte(s) are TX and the subsequent
-  // bytes are RX (with NULL TX). The PMW3610 formally requires t_SRAD (address
-  // to data delay), but many MCUs handle this naturally via SPI clock gaps or
-  // driver overhead. Splitting it risks CS de-assertion which causes fatal
-  // runaway tracking. We revert to a single spi_transceive_dt.
+  /*
+   * PMW3610 requires CS to stay asserted while waiting tSRAD between the
+   * address byte and the first data byte. A single transceive keeps CS low but
+   * provides no inter-byte delay, so split the operation while locking the SPI
+   * bus and holding CS. spi_release() below forcibly releases both on every
+   * exit path.
+   */
+  read_config.operation |= SPI_HOLD_ON_CS | SPI_LOCK_ON;
 
-  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
-                    PMW3610_SPI_CLOCK_CMD_ENABLE);
+  int err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                              PMW3610_SPI_CLOCK_CMD_ENABLE);
+  if (err) {
+    return err;
+  }
   k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
 
-  int err = spi_transceive_dt(&cfg->spi, &tx, &rx);
+  err = spi_write(cfg->spi.bus, &read_config, &tx);
+  if (!err) {
+    k_busy_wait(T_SRAD_DELAY_US);
+    err = spi_read(cfg->spi.bus, &read_config, &rx);
+  }
 
-  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
-                    PMW3610_SPI_CLOCK_CMD_DISABLE);
+  int release_err = spi_release(cfg->spi.bus, &read_config);
+  int disable_err =
+      pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                        PMW3610_SPI_CLOCK_CMD_DISABLE);
 
-  return err;
+  if (err) {
+    return err;
+  }
+  if (release_err) {
+    return release_err;
+  }
+  return disable_err;
 }
 
 static int pmw3610_read_reg(const struct device *dev, uint8_t addr,
