@@ -191,9 +191,30 @@ inertial-scroll-layers = <6 7>;
 &pmw3610_inertia_toggle
 ```
 
+## 縦スクロール方向のトグルキー
+
+縦スクロールの正転・逆転を切り替えるゼロパラメータのビヘイビアを利用できます。
+
+`.keymap` ファイルに以下を追加します：
+
+```dts
+#include <behaviors/pmw3610_scroll_direction_toggle.dtsi>
+```
+
+任意のキーに割り当てます：
+
+```dts
+&pmw3610_scroll_direction_toggle
+```
+
+Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送されます。
+`inertial-scroll-layers` が指定されたセンサーでは対象レイヤーだけを反転するため、
+通常のカーソル方向には影響しません。切替時には進行中の慣性を停止します。
+
 ### keymap-editor をお使いの場合
 
 [nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) は外部 west モジュールのビヘイビアをUI経由で追加できません。ただし、既に `.keymap` に記載されているバインディングはそのまま保持されます。
 
-**ワークアラウンド**: 先に `.keymap` ファイルを手書きで編集して `&pmw3610_inertia_toggle` を1か所以上割り当ててください。以降は keymap-editor でそのキーを別のキーと入れ替える形で操作できます。
-
+**ワークアラウンド**: configリポジトリ側の `.keymap` にBehavior nodeを定義するか、
+`&pmw3610_inertia_toggle` / `&pmw3610_scroll_direction_toggle` を手書きで割り当ててください。
+外部westモジュールを直接解析しないEditorでも既存バインディングは保持されます。

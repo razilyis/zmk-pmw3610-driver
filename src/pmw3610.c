@@ -186,6 +186,14 @@ int pmw3610_set_inertial_scroll_enabled(const struct device *dev,
   return 0;
 }
 
+bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev) {
+  struct pixart_data *data = dev->data;
+  const struct pixart_config *config = dev->config;
+
+  return pmw3610_supports_inertia(dev) && data->vertical_scroll_inverted &&
+         pmw3610_inertial_layer_active(config);
+}
+
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
                         uint8_t len) {
   const struct pixart_config *cfg = dev->config;
@@ -744,6 +752,9 @@ static int pmw3610_report_data(const struct device *dev) {
   // fetch report value
   int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
   int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
+  if (pmw3610_vertical_scroll_direction_is_inverted(dev)) {
+    ry = ry == INT16_MIN ? INT16_MAX : -ry;
+  }
   bool have_x = rx != 0;
   bool have_y = ry != 0;
 
@@ -879,6 +890,7 @@ static int pmw3610_init(const struct device *dev) {
   data->inertia_vy_q8 = 0;
   data->inertia_rx_q8 = 0;
   data->inertia_ry_q8 = 0;
+  data->vertical_scroll_inverted = false;
 
   // init trigger handler work
   k_work_init(&data->trigger_work, pmw3610_work_callback);
@@ -1049,6 +1061,20 @@ void pmw3610_toggle_inertial_scroll_all(void) {
     }
 
     pmw3610_set_inertial_scroll_enabled(dev, !data->inertial_scroll_enabled);
+  }
+}
+
+void pmw3610_toggle_vertical_scroll_direction_all(void) {
+  for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+    const struct device *dev = pmw3610_devs[i];
+    struct pixart_data *data = dev->data;
+
+    if (!pmw3610_supports_inertia(dev)) {
+      continue;
+    }
+
+    data->vertical_scroll_inverted = !data->vertical_scroll_inverted;
+    pmw3610_stop_inertia(data);
   }
 }
 

@@ -42,6 +42,7 @@ struct pixart_data {
   int32_t inertia_rx_q8;
   int32_t inertia_ry_q8;
   bool inertial_scroll_enabled;
+  bool vertical_scroll_inverted;
 
   bool ready; // whether init is finished successfully
   int err;    // error code during async init
