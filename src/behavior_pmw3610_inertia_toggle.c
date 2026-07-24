@@ -14,19 +14,27 @@
 
 #include <zmk/behavior.h>
 
-#include "pmw3610.h"
+#include "pmw3610_control.h"
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
+static int on_keymap_binding_convert_central_state_dependent_params(
+    struct zmk_behavior_binding *binding,
+    struct zmk_behavior_binding_event event) {
+  ARG_UNUSED(event);
+  return pmw3610_control_convert_toggle(PMW3610_CONTROL_INERTIA,
+                                        &binding->param1);
+}
+
 static int on_keymap_binding_pressed(struct zmk_behavior_binding *binding,
                                      struct zmk_behavior_binding_event event) {
-  ARG_UNUSED(binding);
   ARG_UNUSED(event);
 
-  pmw3610_toggle_inertial_scroll_all();
-  return ZMK_BEHAVIOR_OPAQUE;
+  int err = pmw3610_control_apply(PMW3610_CONTROL_INERTIA, binding->param1,
+                                  binding->param2);
+  return err ? err : ZMK_BEHAVIOR_OPAQUE;
 }
 
 static int on_keymap_binding_released(struct zmk_behavior_binding *binding,
@@ -38,6 +46,8 @@ static int on_keymap_binding_released(struct zmk_behavior_binding *binding,
 }
 
 static const struct behavior_driver_api behavior_pmw3610_inertia_toggle_driver_api = {
+    .binding_convert_central_state_dependent_params =
+        on_keymap_binding_convert_central_state_dependent_params,
     .binding_pressed = on_keymap_binding_pressed,
     .binding_released = on_keymap_binding_released,
     .locality = BEHAVIOR_LOCALITY_GLOBAL,

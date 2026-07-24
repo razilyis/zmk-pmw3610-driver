@@ -17,6 +17,8 @@ badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zm
 - **レベルトリガ割り込み**: エッジトリガではなくレベルトリガ (`GPIO_INT_LEVEL_ACTIVE`) を採用し、割り込み無効期間中のモーションイベント取りこぼしを防止。
 - **フェイルセーフ初期化**: SPI 初期化失敗時に最大3回リトライし、連続失敗時は 10 秒バックオフ後に初期化を最初からやり直す。電池切れや文鎮化を防止。
 - **FAULT リカバリ & ジャンプ防止**: FAULT 検知時に蓄積済みの移動量 (`dx`, `dy`) と慣性状態を破棄し、復帰後のカーソル暴走を防止。
+- **入力キュー保護**: X/Y の斜め移動を1つの同期レポートに保ち、X投入後は対応するYが入るまで待つことで、未完了イベントが後から混入することを防止。
+- **慣性状態の排他制御**: 慣性ワーク、トグル、FAULT復旧が同時に走っても、停止後に古い慣性ワークが状態を再生成しないよう保護。
 - **IDLE 省電力の修正**: `force_awake_4ms_mode` が IDLE 移行後も4ms レートを維持し続けるバグを修正。IDLE 時は正しく 8ms デフォルトレートに落ちて省電力動作する。
 
 ### ドライバーサイド慣性スクロール
@@ -224,6 +226,7 @@ inertial-scroll-layers = <6 7>;
 ```
 
 Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送されます。
+単純な反転命令ではなく、Centralで確定したON/OFF状態を明示的に配送します。
 `inertial-scroll-layers` が指定されたセンサーでは対象レイヤーだけを反転するため、
 通常のカーソル方向には影響しません。切替時には進行中の慣性を停止します。
 
@@ -241,11 +244,15 @@ Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送�
 &pmw3610_horizontal_scroll_direction_toggle
 ```
 
-縦方向と同様にGlobal Behaviorとして配送され、通常スクロールと慣性スクロールの両方へ反映されます。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
+縦方向と同様にGlobal Behaviorとして配送され、通常スクロールと慣性スクロールの両方へ反映されます。方向トグル自体は `inertial-scroll` の有無に依存しません。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
 
 ## 片側センサー構成
 
-PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。片側だけにセンサーを搭載したSplit構成では、Global Behaviorを受信した側にPMW3610がなければ何もせず、搭載側のセンサーだけを安全に切り替えます。
+PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。Behavior制御部は `CONFIG_PMW3610` とは独立してビルドされるため、センサーがCentralだけ、Peripheralだけ、または両側にある構成を利用できます。センサーのない側は状態同期だけを担当し、搭載側のセンサーへ設定を適用します。
+
+Split PeripheralはCentralのキーマップレイヤーを直接参照できないため、アクティブレイヤーを制御Behavior経由で同期します。これによりPeripheral側だけにセンサーがある場合も `inertial-scroll-layers` が機能します。切断中に変わったレイヤーとトグル状態は再接続検出後に再送されます（通常5秒以内）。
+
+`CONFIG_SETTINGS=y` の構成では、慣性ON/OFF・縦方向・横方向の状態を保存し、再起動後に復元します。
 
 ### keymap-editor をお使いの場合
 

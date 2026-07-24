@@ -7,6 +7,7 @@
 #define DT_DRV_COMPAT pixart_pmw3610
 
 #include "pmw3610.h"
+#include "pmw3610_control.h"
 #include <zephyr/input/input.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device.h>
@@ -90,19 +91,22 @@ static bool pmw3610_inertial_layer_active(const struct pixart_config *config) {
     return true;
   }
 
-#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
   for (size_t i = 0; i < config->inertial_scroll_layer_count; i++) {
+#if IS_ENABLED(CONFIG_ZMK_SPLIT) &&                                           \
+    !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+    if (pmw3610_control_remote_layer_active(
+            config->inertial_scroll_layers[i])) {
+#else
     if (zmk_keymap_layer_active(config->inertial_scroll_layers[i])) {
+#endif
       return true;
     }
   }
-#endif
 
   return false;
 }
 
-static void pmw3610_stop_inertia(struct pixart_data *data) {
-  k_work_cancel_delayable(&data->inertia_work);
+static void pmw3610_clear_inertia_locked(struct pixart_data *data) {
   data->inertia_vx_q8 = 0;
   data->inertia_vy_q8 = 0;
   data->inertia_rx_q8 = 0;
@@ -110,10 +114,27 @@ static void pmw3610_stop_inertia(struct pixart_data *data) {
   data->inertia_started_ms = 0;
 }
 
-static void pmw3610_reset_gesture_velocity(struct pixart_data *data) {
+static void pmw3610_clear_gesture_velocity_locked(struct pixart_data *data) {
   data->gesture_vx_q8 = 0;
   data->gesture_vy_q8 = 0;
   data->gesture_last_motion_ms = 0;
+}
+
+static void pmw3610_stop_inertia(struct pixart_data *data) {
+  /*
+   * Cancel first, then take the mutex. If the callback is already running,
+   * waiting for the mutex guarantees that its last update is cleared here.
+   */
+  k_work_cancel_delayable(&data->inertia_work);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  pmw3610_clear_inertia_locked(data);
+  k_mutex_unlock(&data->inertia_mutex);
+}
+
+static void pmw3610_reset_gesture_velocity(struct pixart_data *data) {
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  pmw3610_clear_gesture_velocity_locked(data);
+  k_mutex_unlock(&data->inertia_mutex);
 }
 
 static void pmw3610_reset_micro_motion(struct pixart_data *data) {
@@ -251,6 +272,11 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
     return 0;
   }
 
+  /*
+   * Keep a two-axis sample in one synchronized frame for smooth diagonal
+   * motion. Once an unsynchronized X event has entered the queue, wait for
+   * the matching Y event so X can never remain as a stale partial frame.
+   */
   if (have_x) {
     err = input_report(dev, config->evt_type, config->x_input_code, x, !have_y,
                        K_MSEC(1));
@@ -260,7 +286,7 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
   }
   if (have_y) {
     err = input_report(dev, config->evt_type, config->y_input_code, y, true,
-                       K_MSEC(1));
+                       have_x ? K_FOREVER : K_MSEC(1));
     if (err) {
       return err;
     }
@@ -297,11 +323,12 @@ static void pmw3610_schedule_inertia(struct pixart_data *data,
 static void pmw3610_update_inertia_from_motion(
     struct pixart_data *data, const struct pixart_config *config, int16_t rx,
     int16_t ry) {
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
   int64_t now = k_uptime_get();
   if (data->gesture_last_motion_ms == 0 ||
       now - data->gesture_last_motion_ms >
           PMW3610_INERTIA_GESTURE_TIMEOUT_MS) {
-    pmw3610_reset_gesture_velocity(data);
+    pmw3610_clear_gesture_velocity_locked(data);
   }
 
   data->gesture_vx_q8 = pmw3610_filter_gesture_velocity(
@@ -330,14 +357,18 @@ static void pmw3610_update_inertia_from_motion(
     data->inertia_started_ms = now;
     pmw3610_schedule_inertia(data, config);
   }
+  k_mutex_unlock(&data->inertia_mutex);
 }
 
 bool pmw3610_inertial_scroll_is_enabled(const struct device *dev) {
   struct pixart_data *data = dev->data;
   const struct pixart_config *config = dev->config;
 
-  return pmw3610_supports_inertia(dev) && data->inertial_scroll_enabled &&
-         pmw3610_inertial_layer_active(config);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  bool enabled =
+      pmw3610_supports_inertia(dev) && data->inertial_scroll_enabled;
+  k_mutex_unlock(&data->inertia_mutex);
+  return enabled && pmw3610_inertial_layer_active(config);
 }
 
 int pmw3610_set_inertial_scroll_enabled(const struct device *dev,
@@ -348,10 +379,16 @@ int pmw3610_set_inertial_scroll_enabled(const struct device *dev,
     return -ENOTSUP;
   }
 
-  data->inertial_scroll_enabled = enabled && pmw3610_supports_inertia(dev);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  data->inertial_scroll_enabled =
+      enabled && pmw3610_supports_inertia(dev);
   if (!data->inertial_scroll_enabled) {
-    pmw3610_stop_inertia(data);
-    pmw3610_reset_gesture_velocity(data);
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+  }
+  k_mutex_unlock(&data->inertia_mutex);
+  if (!enabled) {
+    k_work_cancel_delayable(&data->inertia_work);
   }
 
   return 0;
@@ -361,8 +398,10 @@ bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev) {
   struct pixart_data *data = dev->data;
   const struct pixart_config *config = dev->config;
 
-  return pmw3610_supports_inertia(dev) && data->vertical_scroll_inverted &&
-         pmw3610_inertial_layer_active(config);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  bool inverted = data->vertical_scroll_inverted;
+  k_mutex_unlock(&data->inertia_mutex);
+  return inverted && pmw3610_inertial_layer_active(config);
 }
 
 bool pmw3610_horizontal_scroll_direction_is_inverted(
@@ -370,8 +409,10 @@ bool pmw3610_horizontal_scroll_direction_is_inverted(
   struct pixart_data *data = dev->data;
   const struct pixart_config *config = dev->config;
 
-  return pmw3610_supports_inertia(dev) && data->horizontal_scroll_inverted &&
-         pmw3610_inertial_layer_active(config);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  bool inverted = data->horizontal_scroll_inverted;
+  k_mutex_unlock(&data->inertia_mutex);
+  return inverted && pmw3610_inertial_layer_active(config);
 }
 
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
@@ -1049,8 +1090,14 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   const struct device *dev = data->dev;
   const struct pixart_config *config = dev->config;
 
-  if (!pmw3610_inertial_scroll_is_enabled(dev)) {
-    pmw3610_stop_inertia(data);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+
+  if (!pmw3610_supports_inertia(dev) ||
+      !data->inertial_scroll_enabled ||
+      !pmw3610_inertial_layer_active(config)) {
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
     return;
   }
 
@@ -1058,8 +1105,9 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   if (data->inertia_started_ms == 0 ||
       now - data->inertia_started_ms >=
           config->inertial_scroll_max_duration_ms) {
-    pmw3610_stop_inertia(data);
-    pmw3610_reset_gesture_velocity(data);
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
     return;
   }
 
@@ -1078,8 +1126,9 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   int emit_err = pmw3610_emit_input(dev, sx, sy);
   if (emit_err) {
     LOG_WRN("Input queue full; stopping PMW3610 inertia: %d", emit_err);
-    pmw3610_stop_inertia(data);
-    pmw3610_reset_gesture_velocity(data);
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
     return;
   }
 
@@ -1096,9 +1145,10 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   if (pmw3610_inertia_active(data, config) && smooth_or_stepped) {
     pmw3610_schedule_inertia(data, config);
   } else {
-    pmw3610_stop_inertia(data);
-    pmw3610_reset_gesture_velocity(data);
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
   }
+  k_mutex_unlock(&data->inertia_mutex);
 }
 
 static int pmw3610_init_irq(const struct device *dev) {
@@ -1143,6 +1193,8 @@ static int pmw3610_init(const struct device *dev) {
 
   // init device pointer
   data->dev = dev;
+  k_mutex_init(&data->spi_mutex);
+  k_mutex_init(&data->inertia_mutex);
 
   // init smart algorithm flag;
   data->sw_smart_flag = false;
@@ -1162,8 +1214,6 @@ static int pmw3610_init(const struct device *dev) {
   data->ready = false;
   data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
   data->init_retries = 0;
-  k_mutex_init(&data->spi_mutex);
-
   // init trigger handler work
   k_work_init(&data->trigger_work, pmw3610_work_callback);
   k_work_init_delayable(&data->inertia_work, pmw3610_inertia_work_callback);
@@ -1396,37 +1446,77 @@ void pmw3610_toggle_inertial_scroll_all(void) {
       continue;
     }
 
-    pmw3610_set_inertial_scroll_enabled(dev, !data->inertial_scroll_enabled);
+    k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+    bool enabled = data->inertial_scroll_enabled;
+    k_mutex_unlock(&data->inertia_mutex);
+    pmw3610_set_inertial_scroll_enabled(dev, !enabled);
+  }
+}
+
+void pmw3610_set_inertial_scroll_all(bool enabled) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
+    const struct device *dev = pmw3610_devs[i];
+    if (pmw3610_supports_inertia(dev)) {
+      pmw3610_set_inertial_scroll_enabled(dev, enabled);
+    }
+  }
+}
+
+void pmw3610_set_vertical_scroll_direction_all(bool inverted) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
+    struct pixart_data *data = pmw3610_devs[i]->data;
+    k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+    if (data->vertical_scroll_inverted == inverted) {
+      k_mutex_unlock(&data->inertia_mutex);
+      continue;
+    }
+
+    data->vertical_scroll_inverted = inverted;
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
+    k_work_cancel_delayable(&data->inertia_work);
   }
 }
 
 void pmw3610_toggle_vertical_scroll_direction_all(void) {
   for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
-    const struct device *dev = pmw3610_devs[i];
-    struct pixart_data *data = dev->data;
+    struct pixart_data *data = pmw3610_devs[i]->data;
+    k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+    data->vertical_scroll_inverted = !data->vertical_scroll_inverted;
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
+    k_work_cancel_delayable(&data->inertia_work);
+  }
+}
 
-    if (!pmw3610_supports_inertia(dev)) {
+void pmw3610_set_horizontal_scroll_direction_all(bool inverted) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
+    struct pixart_data *data = pmw3610_devs[i]->data;
+    k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+    if (data->horizontal_scroll_inverted == inverted) {
+      k_mutex_unlock(&data->inertia_mutex);
       continue;
     }
 
-    data->vertical_scroll_inverted = !data->vertical_scroll_inverted;
-    pmw3610_stop_inertia(data);
-    pmw3610_reset_gesture_velocity(data);
+    data->horizontal_scroll_inverted = inverted;
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
+    k_work_cancel_delayable(&data->inertia_work);
   }
 }
 
 void pmw3610_toggle_horizontal_scroll_direction_all(void) {
   for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
-    const struct device *dev = pmw3610_devs[i];
-    struct pixart_data *data = dev->data;
-
-    if (!pmw3610_supports_inertia(dev)) {
-      continue;
-    }
-
+    struct pixart_data *data = pmw3610_devs[i]->data;
+    k_mutex_lock(&data->inertia_mutex, K_FOREVER);
     data->horizontal_scroll_inverted = !data->horizontal_scroll_inverted;
-    pmw3610_stop_inertia(data);
-    pmw3610_reset_gesture_velocity(data);
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
+    k_work_cancel_delayable(&data->inertia_work);
   }
 }
 

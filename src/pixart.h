@@ -33,6 +33,7 @@ struct pixart_data {
   struct k_work trigger_work;       // realtrigger job
   struct k_work_delayable inertia_work; // delayed inertial scroll job
   struct k_mutex spi_mutex;         // serialize multi-transfer sensor commands
+  struct k_mutex inertia_mutex;     // serialize inertial state and cancellation
 
   struct k_work_delayable
       init_work; // the work structure for delayable init steps

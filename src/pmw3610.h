@@ -108,10 +108,13 @@ extern "C" {
 
 bool pmw3610_inertial_scroll_is_enabled(const struct device *dev);
 int pmw3610_set_inertial_scroll_enabled(const struct device *dev, bool enabled);
+void pmw3610_set_inertial_scroll_all(bool enabled);
 void pmw3610_toggle_inertial_scroll_all(void);
 bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev);
+void pmw3610_set_vertical_scroll_direction_all(bool inverted);
 void pmw3610_toggle_vertical_scroll_direction_all(void);
 bool pmw3610_horizontal_scroll_direction_is_inverted(const struct device *dev);
+void pmw3610_set_horizontal_scroll_direction_all(bool inverted);
 void pmw3610_toggle_horizontal_scroll_direction_all(void);
 
 /** @brief Sensor specific attributes of PMW3610. */
