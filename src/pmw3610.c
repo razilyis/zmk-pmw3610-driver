@@ -70,6 +70,7 @@ static int pmw3610_read_reg(const struct device *dev, uint8_t addr,
                             uint8_t *value);
 static int pmw3610_write_reg(const struct device *dev, uint8_t addr,
                              uint8_t value);
+static int pmw3610_set_interrupt(const struct device *dev, bool en);
 
 static bool pmw3610_supports_inertia(const struct device *dev) {
   const struct pixart_config *config = dev->config;
@@ -78,6 +79,9 @@ static bool pmw3610_supports_inertia(const struct device *dev) {
 }
 
 static int32_t pmw3610_abs32(int32_t value) {
+  if (value == INT32_MIN) {
+    return INT32_MAX;
+  }
   return value < 0 ? -value : value;
 }
 
@@ -109,6 +113,29 @@ static void pmw3610_reset_gesture_velocity(struct pixart_data *data) {
   data->gesture_vx_q8 = 0;
   data->gesture_vy_q8 = 0;
   data->gesture_last_motion_ms = 0;
+}
+
+static void pmw3610_begin_recovery(struct pixart_data *data) {
+  const struct device *dev = data->dev;
+
+  if (!data->ready) {
+    return;
+  }
+
+  data->ready = false;
+  pmw3610_set_interrupt(dev, false);
+  data->dx = 0;
+  data->dy = 0;
+  data->report_error_count = 0;
+  pmw3610_stop_inertia(data);
+  pmw3610_reset_gesture_velocity(data);
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+  data->last_smp_time = 0;
+  data->last_rpt_time = 0;
+#endif
+  data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+  data->init_retries = 0;
+  k_work_reschedule(&data->init_work, K_NO_WAIT);
 }
 
 static int32_t pmw3610_filter_gesture_velocity(int32_t previous_q8,
@@ -243,9 +270,19 @@ bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev) {
          pmw3610_inertial_layer_active(config);
 }
 
+bool pmw3610_horizontal_scroll_direction_is_inverted(
+    const struct device *dev) {
+  struct pixart_data *data = dev->data;
+  const struct pixart_config *config = dev->config;
+
+  return pmw3610_supports_inertia(dev) && data->horizontal_scroll_inverted &&
+         pmw3610_inertial_layer_active(config);
+}
+
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
                         uint8_t len) {
   const struct pixart_config *cfg = dev->config;
+  struct pixart_data *data = dev->data;
   struct spi_config read_config = cfg->spi.config;
   const struct spi_buf tx_buf = {.buf = &addr, .len = sizeof(addr)};
   const struct spi_buf_set tx = {.buffers = &tx_buf, .count = 1};
@@ -260,10 +297,12 @@ static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
    * exit path.
    */
   read_config.operation |= SPI_HOLD_ON_CS | SPI_LOCK_ON;
+  k_mutex_lock(&data->spi_mutex, K_FOREVER);
 
   int err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
                               PMW3610_SPI_CLOCK_CMD_ENABLE);
   if (err) {
+    k_mutex_unlock(&data->spi_mutex);
     return err;
   }
   k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
@@ -278,6 +317,7 @@ static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
   int disable_err =
       pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
                         PMW3610_SPI_CLOCK_CMD_DISABLE);
+  k_mutex_unlock(&data->spi_mutex);
 
   if (err) {
     return err;
@@ -309,22 +349,29 @@ static int pmw3610_write_reg(const struct device *dev, uint8_t addr,
 }
 
 static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
-  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
-                    PMW3610_SPI_CLOCK_CMD_ENABLE);
-  k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+  struct pixart_data *data = dev->data;
+  k_mutex_lock(&data->spi_mutex, K_FOREVER);
 
-  int err = pmw3610_write_reg(dev, reg, val);
-  if (unlikely(err != 0)) {
+  int err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                              PMW3610_SPI_CLOCK_CMD_ENABLE);
+  if (err) {
+    k_mutex_unlock(&data->spi_mutex);
     return err;
   }
+  k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
 
-  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
-                    PMW3610_SPI_CLOCK_CMD_DISABLE);
-  return 0;
+  err = pmw3610_write_reg(dev, reg, val);
+  int disable_err =
+      pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                        PMW3610_SPI_CLOCK_CMD_DISABLE);
+  k_mutex_unlock(&data->spi_mutex);
+
+  return err ? err : disable_err;
 }
 
 static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi, bool swap_xy,
                            bool inv_x, bool inv_y) {
+  struct pixart_data *driver_data = dev->data;
   /* Set resolution with CPI step of 200 cpi
    * 0x1: 200 cpi (minimum cpi)
    * 0x2: 400 cpi
@@ -389,8 +436,13 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi, bool swap_xy,
   uint8_t addr[] = {0x7F, PMW3610_REG_RES_STEP, 0x7F};
   uint8_t data[] = {0xFF, value, 0x00};
 
-  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
-                    PMW3610_SPI_CLOCK_CMD_ENABLE);
+  k_mutex_lock(&driver_data->spi_mutex, K_FOREVER);
+  err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                          PMW3610_SPI_CLOCK_CMD_ENABLE);
+  if (err) {
+    k_mutex_unlock(&driver_data->spi_mutex);
+    return err;
+  }
   k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
 
   /* Write data */
@@ -401,8 +453,13 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi, bool swap_xy,
       break;
     }
   }
-  pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
-                    PMW3610_SPI_CLOCK_CMD_DISABLE);
+  int disable_err =
+      pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                        PMW3610_SPI_CLOCK_CMD_DISABLE);
+  if (!err) {
+    err = disable_err;
+  }
+  k_mutex_unlock(&driver_data->spi_mutex);
 
   if (err) {
     LOG_ERR("Failed to set CPI");
@@ -686,7 +743,13 @@ static void pmw3610_async_init(struct k_work *work) {
     if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
       data->ready = true; // sensor is ready to work
       LOG_INF("PMW3610 initialized");
-      pmw3610_set_interrupt(dev, true);
+      data->err = pmw3610_set_interrupt(dev, true);
+      if (data->err) {
+        LOG_ERR("Failed to enable PMW3610 interrupt; restarting init");
+        data->ready = false;
+        data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+        k_work_reschedule(&data->init_work, K_MSEC(100));
+      }
     } else {
       k_work_schedule(&data->init_work,
                       K_MSEC(async_init_delay[data->async_init_step]));
@@ -711,33 +774,27 @@ static int pmw3610_report_data(const struct device *dev) {
   int err =
       pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
   if (err) {
+    data->report_error_count++;
+    LOG_WRN("Motion read failed (%d/%d): %d", data->report_error_count,
+            PMW3610_REPORT_ERROR_RECOVERY_COUNT, err);
+    if (data->report_error_count >= PMW3610_REPORT_ERROR_RECOVERY_COUNT) {
+      LOG_ERR("Repeated motion read failures; restarting PMW3610");
+      pmw3610_begin_recovery(data);
+    }
     return err;
+  }
+  data->report_error_count = 0;
+
+  // Check FAULT bit
+  if (unlikely(buf[0] & PMW3610_MOTION_FAULT)) {
+    LOG_WRN("Sensor fault detected");
+    pmw3610_begin_recovery(data);
+    return -EIO;
   }
 
   // Check MOT bit to ensure valid motion
   if (!(buf[0] & PMW3610_MOTION_MOT)) {
     return 0;
-  }
-
-  // Check FAULT bit
-  if (unlikely(buf[0] & PMW3610_MOTION_FAULT)) {
-    LOG_WRN("Sensor fault detected");
-    // Clear accumulated motion to prevent cursor jumps after recovery
-    data->dx = 0;
-    data->dy = 0;
-    pmw3610_stop_inertia(data);
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    data->last_smp_time = 0;
-    data->last_rpt_time = 0;
-#endif
-
-    // Delegate re-init sequence to async_init_fn to ensure robust recovery
-    // and proper retries/delays without blocking or failing silently here.
-    data->ready = false;
-    data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
-    data->init_retries = 0; // Reset retry counter for new init sequence
-    k_work_schedule(&data->init_work, K_NO_WAIT);
-    return -EIO;
   }
 
 // 12-bit two's complement value to int16_t
@@ -808,6 +865,13 @@ static int pmw3610_report_data(const struct device *dev) {
       ry = ry == INT16_MIN ? INT16_MAX : -ry;
     }
   }
+  if (pmw3610_horizontal_scroll_direction_is_inverted(dev)) {
+    if (config->vertical_scroll_uses_x_axis) {
+      ry = ry == INT16_MIN ? INT16_MAX : -ry;
+    } else {
+      rx = rx == INT16_MIN ? INT16_MAX : -rx;
+    }
+  }
   bool have_x = rx != 0;
   bool have_y = ry != 0;
 
@@ -843,14 +907,21 @@ static void pmw3610_work_callback(struct k_work *work) {
   struct pixart_data *data =
       CONTAINER_OF(work, struct pixart_data, trigger_work);
   const struct device *dev = data->dev;
-  pmw3610_report_data(dev);
+  int report_err = pmw3610_report_data(dev);
 
   // If sensor triggered a fault, data->ready is false.
   // Re-enabling level-triggered IRQ here would cause an infinite loop.
   // The IRQ will be re-enabled securely at the end of the init/recovery
   // sequence.
   if (data->ready) {
-    pmw3610_set_interrupt(dev, true);
+    int irq_err = pmw3610_set_interrupt(dev, true);
+    if (irq_err) {
+      LOG_ERR("Failed to re-enable PMW3610 interrupt after report: %d",
+              irq_err);
+      pmw3610_begin_recovery(data);
+    } else if (report_err) {
+      LOG_DBG("PMW3610 report failed but IRQ was restored: %d", report_err);
+    }
   }
 }
 
@@ -867,9 +938,13 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   }
 
   data->inertia_vx_q8 =
-      (data->inertia_vx_q8 * config->inertial_scroll_decay_pct) / 100;
+      (int32_t)(((int64_t)data->inertia_vx_q8 *
+                 config->inertial_scroll_decay_basis_points) /
+                10000);
   data->inertia_vy_q8 =
-      (data->inertia_vy_q8 * config->inertial_scroll_decay_pct) / 100;
+      (int32_t)(((int64_t)data->inertia_vy_q8 *
+                 config->inertial_scroll_decay_basis_points) /
+                10000);
 
   int16_t sx = pmw3610_q8_to_step(&data->inertia_rx_q8, data->inertia_vx_q8);
   int16_t sy = pmw3610_q8_to_step(&data->inertia_ry_q8, data->inertia_vy_q8);
@@ -948,6 +1023,12 @@ static int pmw3610_init(const struct device *dev) {
   data->gesture_vy_q8 = 0;
   data->gesture_last_motion_ms = 0;
   data->vertical_scroll_inverted = false;
+  data->horizontal_scroll_inverted = false;
+  data->report_error_count = 0;
+  data->ready = false;
+  data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+  data->init_retries = 0;
+  k_mutex_init(&data->spi_mutex);
 
   // init trigger handler work
   k_work_init(&data->trigger_work, pmw3610_work_callback);
@@ -1070,7 +1151,31 @@ static const struct sensor_driver_api pmw3610_driver_api = {
               (.inertial_scroll_layers = NULL,                                 \
                .inertial_scroll_layer_count = 0,))
 
+#define PMW3610_VALIDATE_CONFIG(n)                                              \
+  BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), cpi) >= PMW3610_MIN_CPI &&              \
+                   DT_PROP(DT_DRV_INST(n), cpi) <= PMW3610_MAX_CPI &&           \
+                   DT_PROP(DT_DRV_INST(n), cpi) % 200 == 0,                     \
+               "PMW3610 cpi must be 200..3200 in steps of 200");                \
+  BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), motion_threshold) <= 1024,               \
+               "PMW3610 motion-threshold must be 0..1024");                    \
+  BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                     \
+                   (DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct) > 0 &&   \
+                    DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct) <= 100), \
+               "PMW3610 inertial decay must be 1..100 percent");               \
+  BUILD_ASSERT(                                                                \
+      DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_basis_points) <= 10000,    \
+      "PMW3610 inertial decay basis points must be 0..10000");                 \
+  BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                     \
+                   (DT_PROP(DT_DRV_INST(n), inertial_scroll_interval_ms) > 0 && \
+                    DT_PROP(DT_DRV_INST(n), inertial_scroll_interval_ms) <=     \
+                        1000),                                                  \
+               "PMW3610 inertial interval must be 1..1000 ms");                \
+  BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                     \
+                   DT_PROP(DT_DRV_INST(n), inertial_scroll_gain_pct) <= 1000,   \
+               "PMW3610 inertial gain must be 0..1000 percent")
+
 #define PMW3610_DEFINE(n)                                                      \
+  PMW3610_VALIDATE_CONFIG(n);                                                  \
   PMW3610_DECLARE_INERTIAL_LAYERS(n)                                           \
   static struct pixart_data data##n;                                           \
   static const struct pixart_config config##n = {                              \
@@ -1087,8 +1192,10 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                     \
       .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),   \
       .inertial_scroll = DT_PROP(DT_DRV_INST(n), inertial_scroll),             \
-      .inertial_scroll_decay_pct =                                             \
-          DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct),                  \
+      .inertial_scroll_decay_basis_points =                                    \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_basis_points) > 0      \
+              ? DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_basis_points)    \
+              : DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct) * 100,      \
       .inertial_scroll_interval_ms =                                           \
           DT_PROP(DT_DRV_INST(n), inertial_scroll_interval_ms),                \
       .inertial_scroll_threshold =                                             \
@@ -1107,11 +1214,13 @@ DT_INST_FOREACH_STATUS_OKAY(PMW3610_DEFINE)
 
 #define GET_PMW3610_DEV(node_id) DEVICE_DT_GET(node_id),
 
-static const struct device *pmw3610_devs[] = {
-    DT_FOREACH_STATUS_OKAY(pixart_pmw3610, GET_PMW3610_DEV)};
+static const struct device *const pmw3610_devs[] = {
+    DT_FOREACH_STATUS_OKAY(pixart_pmw3610, GET_PMW3610_DEV) NULL};
+
+#define PMW3610_DEVICE_COUNT (ARRAY_SIZE(pmw3610_devs) - 1)
 
 void pmw3610_toggle_inertial_scroll_all(void) {
-  for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
     const struct device *dev = pmw3610_devs[i];
     struct pixart_data *data = dev->data;
 
@@ -1124,7 +1233,7 @@ void pmw3610_toggle_inertial_scroll_all(void) {
 }
 
 void pmw3610_toggle_vertical_scroll_direction_all(void) {
-  for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
     const struct device *dev = pmw3610_devs[i];
     struct pixart_data *data = dev->data;
 
@@ -1134,6 +1243,22 @@ void pmw3610_toggle_vertical_scroll_direction_all(void) {
 
     data->vertical_scroll_inverted = !data->vertical_scroll_inverted;
     pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
+  }
+}
+
+void pmw3610_toggle_horizontal_scroll_direction_all(void) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
+    const struct device *dev = pmw3610_devs[i];
+    struct pixart_data *data = dev->data;
+
+    if (!pmw3610_supports_inertia(dev)) {
+      continue;
+    }
+
+    data->horizontal_scroll_inverted = !data->horizontal_scroll_inverted;
+    pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
   }
 }
 
@@ -1147,10 +1272,14 @@ static int on_activity_state(const zmk_event_t *eh) {
   }
 
   bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
-  for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+  for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
     struct pixart_data *data = pmw3610_devs[i]->data;
     if (likely(data->ready)) {
-      pmw3610_set_performance(pmw3610_devs[i], enable);
+      int err = pmw3610_set_performance(pmw3610_devs[i], enable);
+      if (err) {
+        LOG_ERR("Failed to change PMW3610 performance state: %d", err);
+        pmw3610_begin_recovery(data);
+      }
     }
   }
 

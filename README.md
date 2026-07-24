@@ -163,6 +163,7 @@ CONFIG_PMW3610=y
 | `inertial-scroll` | boolean | — | 慣性スクロールを有効化する |
 | `inertial-scroll-gain-pct` | int | 130 | 平滑化したジェスチャー速度から慣性初速を生成する際のゲイン（%）。大きいほど速くなる |
 | `inertial-scroll-decay-pct` | int | 99 | 毎 tick の速度減衰率（%）。小さいほど早く止まる |
+| `inertial-scroll-decay-basis-points` | int | 0 | 任意の高精度減衰率（0.01%単位）。`9920`は99.20%。0なら`decay-pct`を使用 |
 | `inertial-scroll-interval-ms` | int | 10 | 慣性スクロールの合成レポート間隔（ms） |
 | `inertial-scroll-threshold` | int | 4 | 慣性スクロールを停止する速度閾値（Q8 固定小数点単位） |
 | `inertial-scroll-layers` | array | — | 慣性スクロールを有効にするレイヤー番号のリスト。省略時は全レイヤーで有効 |
@@ -216,10 +217,31 @@ Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送�
 `inertial-scroll-layers` が指定されたセンサーでは対象レイヤーだけを反転するため、
 通常のカーソル方向には影響しません。切替時には進行中の慣性を停止します。
 
+## 横スクロール方向のトグルキー
+
+横スクロールの正転・逆転を切り替えるゼロパラメータのビヘイビアを利用できます。
+
+```dts
+#include <behaviors/pmw3610_horizontal_scroll_direction_toggle.dtsi>
+```
+
+任意のキーに割り当てます：
+
+```dts
+&pmw3610_horizontal_scroll_direction_toggle
+```
+
+縦方向と同様にGlobal Behaviorとして配送され、通常スクロールと慣性スクロールの両方へ反映されます。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
+
+## 片側センサー構成
+
+PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。片側だけにセンサーを搭載したSplit構成では、Global Behaviorを受信した側にPMW3610がなければ何もせず、搭載側のセンサーだけを安全に切り替えます。
+
 ### keymap-editor をお使いの場合
 
 [nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) は外部 west モジュールのビヘイビアをUI経由で追加できません。ただし、既に `.keymap` に記載されているバインディングはそのまま保持されます。
 
 **ワークアラウンド**: configリポジトリ側の `.keymap` にBehavior nodeを定義するか、
-`&pmw3610_inertia_toggle` / `&pmw3610_scroll_direction_toggle` を手書きで割り当ててください。
+`&pmw3610_inertia_toggle` / `&pmw3610_scroll_direction_toggle` /
+`&pmw3610_horizontal_scroll_direction_toggle` を手書きで割り当ててください。
 外部westモジュールを直接解析しないEditorでも既存バインディングは保持されます。

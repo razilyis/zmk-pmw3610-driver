@@ -1,0 +1,8 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: PMW3610 horizontal scroll direction toggle behavior
+
+compatible: "zmk,behavior-pmw3610-horizontal-scroll-direction-toggle"
+
+include: zero_param.yaml

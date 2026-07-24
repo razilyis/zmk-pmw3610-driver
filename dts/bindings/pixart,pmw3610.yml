@@ -45,6 +45,10 @@ properties:
     type: int
     default: 99
     description: "Velocity decay percentage applied on each inertial tick."
+  inertial-scroll-decay-basis-points:
+    type: int
+    default: 0
+    description: "Optional velocity retention in 0.01 percent units; zero uses inertial-scroll-decay-pct."
   inertial-scroll-interval-ms:
     type: int
     default: 10
@@ -62,4 +66,4 @@ properties:
     description: "List of active ZMK layer numbers where inertial scrolling is allowed. Omit this property to allow all layers."
   vertical-scroll-uses-x-axis:
     type: boolean
-    description: "Treat the sensor X axis as vertical scroll for direction toggling. Use for sensors mounted with a 90-degree rotation."
+    description: "Treat the sensor X axis as vertical and Y as horizontal for direction toggling. Use for sensors mounted with a 90-degree rotation."

@@ -1,0 +1,10 @@
+/ {
+    behaviors {
+        /omit-if-no-ref/ pmw3610_horizontal_scroll_direction_toggle: pmw3610_horizontal_scroll_direction_toggle {
+            compatible = "zmk,behavior-pmw3610-horizontal-scroll-direction-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_HORIZONTAL_SCROLL_DIRECTION_TOGGLE";
+            display-name = "PMW3610 Horizontal Scroll Direction Toggle";
+        };
+    };
+};

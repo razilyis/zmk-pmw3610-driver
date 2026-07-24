@@ -32,11 +32,13 @@ struct pixart_data {
   struct gpio_callback irq_gpio_cb; // motion pin irq callback
   struct k_work trigger_work;       // realtrigger job
   struct k_work_delayable inertia_work; // delayed inertial scroll job
+  struct k_mutex spi_mutex;         // serialize multi-transfer sensor commands
 
   struct k_work_delayable
       init_work; // the work structure for delayable init steps
   int async_init_step;
   uint8_t init_retries; // counter for async init retries
+  uint8_t report_error_count;
   int32_t inertia_vx_q8;
   int32_t inertia_vy_q8;
   int32_t inertia_rx_q8;
@@ -46,6 +48,7 @@ struct pixart_data {
   int64_t gesture_last_motion_ms;
   bool inertial_scroll_enabled;
   bool vertical_scroll_inverted;
+  bool horizontal_scroll_inverted;
 
   bool ready; // whether init is finished successfully
   int err;    // error code during async init
@@ -66,7 +69,7 @@ struct pixart_config {
   bool force_awake;
   bool force_awake_4ms_mode;
   bool inertial_scroll;
-  uint16_t inertial_scroll_decay_pct;
+  uint16_t inertial_scroll_decay_basis_points;
   uint16_t inertial_scroll_interval_ms;
   uint16_t inertial_scroll_threshold;
   uint16_t inertial_scroll_gain_pct;

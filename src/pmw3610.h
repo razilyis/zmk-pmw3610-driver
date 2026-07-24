@@ -97,6 +97,7 @@ extern "C" {
 #define PMW3610_INERTIA_GESTURE_TIMEOUT_MS 80
 #define PMW3610_INERTIA_ATTACK_PREVIOUS_PCT 25
 #define PMW3610_INERTIA_RELEASE_PREVIOUS_PCT 80
+#define PMW3610_REPORT_ERROR_RECOVERY_COUNT 3
 
 /* write command bit position */
 #define SPI_WRITE_BIT BIT(7)
@@ -110,6 +111,8 @@ int pmw3610_set_inertial_scroll_enabled(const struct device *dev, bool enabled);
 void pmw3610_toggle_inertial_scroll_all(void);
 bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev);
 void pmw3610_toggle_vertical_scroll_direction_all(void);
+bool pmw3610_horizontal_scroll_direction_is_inverted(const struct device *dev);
+void pmw3610_toggle_horizontal_scroll_direction_all(void);
 
 /** @brief Sensor specific attributes of PMW3610. */
 enum pmw3610_attribute {
