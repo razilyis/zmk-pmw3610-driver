@@ -1,4 +1,4 @@
-# zmk-pmw3610-driver — Dev-v0.3_inertial-scroll-v2
+# zmk-pmw3610-driver — Dev-v0.3_inertial-scroll
 
 ## Credits & Respect
 
@@ -10,7 +10,7 @@ badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zm
 
 ---
 
-## このブランチ (Dev-v0.3_inertial-scroll-v2) の概要
+## このブランチ (Dev-v0.3_inertial-scroll) の概要
 
 ### 安定性・電源管理の改善
 
@@ -39,7 +39,7 @@ manifest:
   projects:
     - name: zmk-pmw3610-driver
       remote: razilyis
-      revision: Dev-v0.3_inertial-scroll-v2
+      revision: Dev-v0.3_inertial-scroll
   self:
     path: config
 ```
