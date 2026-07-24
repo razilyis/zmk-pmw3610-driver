@@ -19,6 +19,20 @@ properties:
     description: |
       Ignore X/Y motion deltas whose absolute values are both at or below this
       threshold. Set to 0 to disable drift filtering.
+  low-speed-stabilizer:
+    type: boolean
+    description: |
+      Stabilize low-speed pointer motion without discarding distance. Repeated
+      same-direction micro motion is emitted, while isolated direction
+      reversals are held for confirmation and cancelled when they bounce back.
+  low-speed-stabilizer-threshold:
+    type: int
+    default: 1
+    description: "Largest absolute delta treated as micro motion."
+  low-speed-stabilizer-timeout-ms:
+    type: int
+    default: 30
+    description: "Idle time after which micro-motion direction history is reset."
   swap-xy:
     type: boolean
   invert-x:

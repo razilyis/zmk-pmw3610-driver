@@ -46,6 +46,12 @@ struct pixart_data {
   int32_t gesture_vx_q8;
   int32_t gesture_vy_q8;
   int64_t gesture_last_motion_ms;
+  int16_t micro_x_pending;
+  int16_t micro_y_pending;
+  int64_t micro_x_last_motion_ms;
+  int64_t micro_y_last_motion_ms;
+  int8_t micro_x_direction;
+  int8_t micro_y_direction;
   bool inertial_scroll_enabled;
   bool vertical_scroll_inverted;
   bool horizontal_scroll_inverted;
@@ -60,6 +66,9 @@ struct pixart_config {
   struct gpio_dt_spec irq_gpio;
   uint16_t cpi;
   uint16_t motion_threshold;
+  bool low_speed_stabilizer;
+  uint16_t low_speed_stabilizer_threshold;
+  uint16_t low_speed_stabilizer_timeout_ms;
   bool swap_xy;
   bool inv_x;
   bool inv_y;

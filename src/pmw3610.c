@@ -115,6 +115,82 @@ static void pmw3610_reset_gesture_velocity(struct pixart_data *data) {
   data->gesture_last_motion_ms = 0;
 }
 
+static void pmw3610_reset_micro_motion(struct pixart_data *data) {
+  data->micro_x_pending = 0;
+  data->micro_y_pending = 0;
+  data->micro_x_last_motion_ms = 0;
+  data->micro_y_last_motion_ms = 0;
+  data->micro_x_direction = 0;
+  data->micro_y_direction = 0;
+}
+
+static int16_t pmw3610_stabilize_micro_axis(
+    int16_t value, int16_t *pending, int8_t *direction,
+    int64_t *last_motion_ms, const struct pixart_config *config, int64_t now) {
+  if (*last_motion_ms > 0 &&
+      now - *last_motion_ms > config->low_speed_stabilizer_timeout_ms) {
+    *pending = 0;
+    *direction = 0;
+  }
+
+  if (value == 0) {
+    return 0;
+  }
+
+  *last_motion_ms = now;
+  int8_t value_direction = value > 0 ? 1 : -1;
+
+  if (pmw3610_abs32(value) > config->low_speed_stabilizer_threshold) {
+    *pending = 0;
+    *direction = value_direction;
+    return value;
+  }
+
+  if (*direction == value_direction) {
+    *pending = 0;
+    return value;
+  }
+
+  if (*pending != 0 &&
+      ((*pending > 0 && value < 0) || (*pending < 0 && value > 0))) {
+    *pending += value;
+    return 0;
+  }
+
+  *pending += value;
+  if (pmw3610_abs32(*pending) <=
+      config->low_speed_stabilizer_threshold) {
+    return 0;
+  }
+
+  int16_t stabilized = *pending;
+  *pending = 0;
+  *direction = stabilized > 0 ? 1 : -1;
+  return stabilized;
+}
+
+static void pmw3610_apply_low_speed_stabilizer(const struct device *dev,
+                                                int16_t *x, int16_t *y) {
+  struct pixart_data *data = dev->data;
+  const struct pixart_config *config = dev->config;
+
+  bool scroll_layer_active =
+      pmw3610_supports_inertia(dev) &&
+      pmw3610_inertial_layer_active(config);
+  if (!config->low_speed_stabilizer || scroll_layer_active) {
+    pmw3610_reset_micro_motion(data);
+    return;
+  }
+
+  int64_t now = k_uptime_get();
+  *x = pmw3610_stabilize_micro_axis(
+      *x, &data->micro_x_pending, &data->micro_x_direction,
+      &data->micro_x_last_motion_ms, config, now);
+  *y = pmw3610_stabilize_micro_axis(
+      *y, &data->micro_y_pending, &data->micro_y_direction,
+      &data->micro_y_last_motion_ms, config, now);
+}
+
 static void pmw3610_begin_recovery(struct pixart_data *data) {
   const struct device *dev = data->dev;
 
@@ -129,6 +205,7 @@ static void pmw3610_begin_recovery(struct pixart_data *data) {
   data->report_error_count = 0;
   pmw3610_stop_inertia(data);
   pmw3610_reset_gesture_velocity(data);
+  pmw3610_reset_micro_motion(data);
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
   data->last_smp_time = 0;
   data->last_rpt_time = 0;
@@ -819,6 +896,10 @@ static int pmw3610_report_data(const struct device *dev) {
     LOG_DBG("Drift-sized motion delta filtered (x:%d, y:%d)", x, y);
     return 0;
   }
+  pmw3610_apply_low_speed_stabilizer(dev, &x, &y);
+  if (x == 0 && y == 0) {
+    return 0;
+  }
   LOG_DBG("x/y: %d/%d", x, y);
 
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
@@ -1022,6 +1103,7 @@ static int pmw3610_init(const struct device *dev) {
   data->gesture_vx_q8 = 0;
   data->gesture_vy_q8 = 0;
   data->gesture_last_motion_ms = 0;
+  pmw3610_reset_micro_motion(data);
   data->vertical_scroll_inverted = false;
   data->horizontal_scroll_inverted = false;
   data->report_error_count = 0;
@@ -1158,6 +1240,16 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                "PMW3610 cpi must be 200..3200 in steps of 200");                \
   BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), motion_threshold) <= 1024,               \
                "PMW3610 motion-threshold must be 0..1024");                    \
+  BUILD_ASSERT(                                                                \
+      !DT_PROP(DT_DRV_INST(n), low_speed_stabilizer) ||                        \
+          (DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_threshold) > 0 &&      \
+           DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_threshold) <= 16),     \
+      "PMW3610 low-speed-stabilizer-threshold must be 1..16");                 \
+  BUILD_ASSERT(                                                                \
+      !DT_PROP(DT_DRV_INST(n), low_speed_stabilizer) ||                        \
+          (DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_timeout_ms) > 0 &&     \
+           DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_timeout_ms) <= 1000),  \
+      "PMW3610 low-speed-stabilizer-timeout-ms must be 1..1000");              \
   BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                     \
                    (DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct) > 0 &&   \
                     DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_pct) <= 100), \
@@ -1183,6 +1275,12 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                         \
       .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                     \
       .motion_threshold = DT_PROP(DT_DRV_INST(n), motion_threshold),           \
+      .low_speed_stabilizer =                                                  \
+          DT_PROP(DT_DRV_INST(n), low_speed_stabilizer),                       \
+      .low_speed_stabilizer_threshold =                                        \
+          DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_threshold),             \
+      .low_speed_stabilizer_timeout_ms =                                       \
+          DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_timeout_ms),            \
       .swap_xy = DT_PROP(DT_DRV_INST(n), swap_xy),                             \
       .inv_x = DT_PROP(DT_DRV_INST(n), invert_x),                              \
       .inv_y = DT_PROP(DT_DRV_INST(n), invert_y),                              \
