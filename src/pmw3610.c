@@ -107,6 +107,7 @@ static void pmw3610_stop_inertia(struct pixart_data *data) {
   data->inertia_vy_q8 = 0;
   data->inertia_rx_q8 = 0;
   data->inertia_ry_q8 = 0;
+  data->inertia_started_ms = 0;
 }
 
 static void pmw3610_reset_gesture_velocity(struct pixart_data *data) {
@@ -240,23 +241,32 @@ static int32_t pmw3610_filter_gesture_velocity(int32_t previous_q8,
                    100);
 }
 
-static void pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
+static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
   const struct pixart_config *config = dev->config;
   bool have_x = x != 0;
   bool have_y = y != 0;
+  int err;
 
   if (!have_x && !have_y) {
-    return;
+    return 0;
   }
 
   if (have_x) {
-    input_report(dev, config->evt_type, config->x_input_code, x, !have_y,
-                 K_NO_WAIT);
+    err = input_report(dev, config->evt_type, config->x_input_code, x, !have_y,
+                       K_MSEC(1));
+    if (err) {
+      return err;
+    }
   }
   if (have_y) {
-    input_report(dev, config->evt_type, config->y_input_code, y, true,
-                 K_NO_WAIT);
+    err = input_report(dev, config->evt_type, config->y_input_code, y, true,
+                       K_MSEC(1));
+    if (err) {
+      return err;
+    }
   }
+
+  return 0;
 }
 
 static int16_t pmw3610_q8_to_step(int32_t *remainder_q8,
@@ -309,7 +319,15 @@ static void pmw3610_update_inertia_from_motion(
                  config->inertial_scroll_gain_pct) /
                 100);
 
+  int32_t max_velocity_q8 =
+      (int32_t)config->inertial_scroll_max_velocity * PMW3610_INERTIA_SCALE;
+  data->inertia_vx_q8 =
+      CLAMP(data->inertia_vx_q8, -max_velocity_q8, max_velocity_q8);
+  data->inertia_vy_q8 =
+      CLAMP(data->inertia_vy_q8, -max_velocity_q8, max_velocity_q8);
+
   if (pmw3610_inertia_active(data, config)) {
+    data->inertia_started_ms = now;
     pmw3610_schedule_inertia(data, config);
   }
 }
@@ -884,11 +902,14 @@ static int pmw3610_report_data(const struct device *dev) {
   int16_t y = TOINT16(
       (buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
 
-  // Filter out potential spikes: 12-bit max is 2047.
-  // If delta is extremely large (e.g. > 1024) and MOT was just set, it might be
-  // noise.
-  if (abs(x) > 1024 || abs(y) > 1024) {
+  // A successful SPI transaction can still contain a corrupted motion sample.
+  // Reject implausibly large single-frame deltas before they reach the pointer
+  // or seed a long inertial tail.
+  if (abs(x) >= config->max_motion_delta ||
+      abs(y) >= config->max_motion_delta) {
     LOG_WRN("Extreme motion delta detected (x:%d, y:%d), filtering", x, y);
+    pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
     return 0;
   }
   if (config->motion_threshold > 0 &&
@@ -906,12 +927,21 @@ static int pmw3610_report_data(const struct device *dev) {
   int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8) +
                     buf[PMW3610_SHUTTER_L_POS];
   if (data->sw_smart_flag && shutter < 45) {
-    pmw3610_write(dev, 0x32, 0x00);
-    data->sw_smart_flag = false;
+    err = pmw3610_write(dev, 0x32, 0x00);
+    if (!err) {
+      data->sw_smart_flag = false;
+    }
   }
-  if (!data->sw_smart_flag && shutter > 45) {
-    pmw3610_write(dev, 0x32, 0x80);
-    data->sw_smart_flag = true;
+  if (!err && !data->sw_smart_flag && shutter > 45) {
+    err = pmw3610_write(dev, 0x32, 0x80);
+    if (!err) {
+      data->sw_smart_flag = true;
+    }
+  }
+  if (err) {
+    LOG_WRN("Smart algorithm write failed; restarting PMW3610: %d", err);
+    pmw3610_begin_recovery(data);
+    return err;
   }
 #endif
 
@@ -966,7 +996,13 @@ static int pmw3610_report_data(const struct device *dev) {
       pmw3610_stop_inertia(data);
     }
 
-    pmw3610_emit_input(dev, rx, ry);
+    err = pmw3610_emit_input(dev, rx, ry);
+    if (err) {
+      LOG_WRN("Input queue full; dropping PMW3610 report: %d", err);
+      pmw3610_stop_inertia(data);
+      pmw3610_reset_gesture_velocity(data);
+      return err;
+    }
 
     if (pmw3610_inertial_scroll_is_enabled(dev)) {
       pmw3610_update_inertia_from_motion(data, config, rx, ry);
@@ -1018,6 +1054,15 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
     return;
   }
 
+  int64_t now = k_uptime_get();
+  if (data->inertia_started_ms == 0 ||
+      now - data->inertia_started_ms >=
+          config->inertial_scroll_max_duration_ms) {
+    pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
+    return;
+  }
+
   data->inertia_vx_q8 =
       (int32_t)(((int64_t)data->inertia_vx_q8 *
                  config->inertial_scroll_decay_basis_points) /
@@ -1030,7 +1075,13 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   int16_t sx = pmw3610_q8_to_step(&data->inertia_rx_q8, data->inertia_vx_q8);
   int16_t sy = pmw3610_q8_to_step(&data->inertia_ry_q8, data->inertia_vy_q8);
 
-  pmw3610_emit_input(dev, sx, sy);
+  int emit_err = pmw3610_emit_input(dev, sx, sy);
+  if (emit_err) {
+    LOG_WRN("Input queue full; stopping PMW3610 inertia: %d", emit_err);
+    pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
+    return;
+  }
 
   // Continue only while velocity is in the smooth zone (>= 1 step per tick),
   // or while we actually emitted a step this tick from accumulated remainder.
@@ -1103,6 +1154,7 @@ static int pmw3610_init(const struct device *dev) {
   data->gesture_vx_q8 = 0;
   data->gesture_vy_q8 = 0;
   data->gesture_last_motion_ms = 0;
+  data->inertia_started_ms = 0;
   pmw3610_reset_micro_motion(data);
   data->vertical_scroll_inverted = false;
   data->horizontal_scroll_inverted = false;
@@ -1240,6 +1292,9 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                "PMW3610 cpi must be 200..3200 in steps of 200");                \
   BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), motion_threshold) <= 1024,               \
                "PMW3610 motion-threshold must be 0..1024");                    \
+  BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_motion_delta) > 0 &&                 \
+                   DT_PROP(DT_DRV_INST(n), max_motion_delta) <= 2048,           \
+               "PMW3610 max-motion-delta must be 1..2048");                    \
   BUILD_ASSERT(                                                                \
       !DT_PROP(DT_DRV_INST(n), low_speed_stabilizer) ||                        \
           (DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_threshold) > 0 &&      \
@@ -1264,7 +1319,17 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                "PMW3610 inertial interval must be 1..1000 ms");                \
   BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                     \
                    DT_PROP(DT_DRV_INST(n), inertial_scroll_gain_pct) <= 1000,   \
-               "PMW3610 inertial gain must be 0..1000 percent")
+               "PMW3610 inertial gain must be 0..1000 percent");               \
+  BUILD_ASSERT(                                                                \
+      !DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                             \
+          (DT_PROP(DT_DRV_INST(n), inertial_scroll_max_velocity) > 0 &&         \
+           DT_PROP(DT_DRV_INST(n), inertial_scroll_max_velocity) <= 1024),      \
+      "PMW3610 inertial max velocity must be 1..1024 steps per tick");          \
+  BUILD_ASSERT(                                                                \
+      !DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                             \
+          (DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms) > 0 &&      \
+           DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms) <= 10000),  \
+      "PMW3610 inertial max duration must be 1..10000 ms")
 
 #define PMW3610_DEFINE(n)                                                      \
   PMW3610_VALIDATE_CONFIG(n);                                                  \
@@ -1275,6 +1340,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                         \
       .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                     \
       .motion_threshold = DT_PROP(DT_DRV_INST(n), motion_threshold),           \
+      .max_motion_delta = DT_PROP(DT_DRV_INST(n), max_motion_delta),           \
       .low_speed_stabilizer =                                                  \
           DT_PROP(DT_DRV_INST(n), low_speed_stabilizer),                       \
       .low_speed_stabilizer_threshold =                                        \
@@ -1300,6 +1366,10 @@ static const struct sensor_driver_api pmw3610_driver_api = {
           DT_PROP(DT_DRV_INST(n), inertial_scroll_threshold),                  \
       .inertial_scroll_gain_pct =                                              \
           DT_PROP(DT_DRV_INST(n), inertial_scroll_gain_pct),                   \
+      .inertial_scroll_max_velocity =                                          \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_max_velocity),               \
+      .inertial_scroll_max_duration_ms =                                       \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms),            \
       .vertical_scroll_uses_x_axis =                                           \
           DT_PROP(DT_DRV_INST(n), vertical_scroll_uses_x_axis),                 \
       PMW3610_INIT_INERTIAL_LAYERS(n)                                          \

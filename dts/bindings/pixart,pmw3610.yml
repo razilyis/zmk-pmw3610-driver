@@ -19,6 +19,13 @@ properties:
     description: |
       Ignore X/Y motion deltas whose absolute values are both at or below this
       threshold. Set to 0 to disable drift filtering.
+  max-motion-delta:
+    type: int
+    default: 512
+    description: |
+      Reject a single motion sample when either axis reaches this absolute
+      value. This prevents corrupted-but-successful SPI samples from producing
+      a pointer jump or seeding inertial scrolling.
   low-speed-stabilizer:
     type: boolean
     description: |
@@ -75,6 +82,14 @@ properties:
     type: int
     default: 130
     description: "Gain percentage used to derive inertial velocity from the latest physical scroll delta."
+  inertial-scroll-max-velocity:
+    type: int
+    default: 32
+    description: "Maximum inertial output velocity in whole scroll steps per tick."
+  inertial-scroll-max-duration-ms:
+    type: int
+    default: 1800
+    description: "Maximum duration in milliseconds of one inertial tail."
   inertial-scroll-layers:
     type: array
     description: "List of active ZMK layer numbers where inertial scrolling is allowed. Omit this property to allow all layers."
