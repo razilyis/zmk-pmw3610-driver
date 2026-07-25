@@ -168,7 +168,11 @@ CONFIG_PMW3610=y
 | `inertial-scroll-decay-basis-points` | int | 0 | 任意の高精度減衰率（0.01%単位）。`9920`は99.20%。0なら`decay-pct`を使用 |
 | `inertial-scroll-interval-ms` | int | 10 | 慣性スクロールの合成レポート間隔（ms） |
 | `inertial-scroll-threshold` | int | 4 | 慣性スクロールを停止する速度閾値（Q8 固定小数点単位） |
+| `inertial-scroll-max-velocity` | int | 32 | 慣性初速の上限（1 tickあたりのステップ数） |
+| `inertial-scroll-max-duration-ms` | int | 1800 | 1回の慣性スクロールを継続できる最大時間（ms） |
+| `inertial-scroll-fade-duration-ms` | int | 250 | 最大継続時間の直前に速度を線形フェードする時間（ms）。`0`で無効 |
 | `inertial-scroll-layers` | array | — | 慣性スクロールを有効にするレイヤー番号のリスト。省略時は全レイヤーで有効 |
+| `scroll-direction-toggle` | boolean | — | `inertial-scroll`を使わないスクロール専用センサーも方向トグルの対象にする |
 | `vertical-scroll-uses-x-axis` | boolean | false | 90度回転して搭載したセンサーで、生のX軸を縦スクロール方向トグルの対象にする |
 
 `inertial-scroll-layers` は、同じ PMW3610 をポインタとスクロールで兼用する場合に使います。スクロールレイヤーの番号だけを指定してください：
@@ -177,7 +181,7 @@ CONFIG_PMW3610=y
 inertial-scroll-layers = <6 7>;
 ```
 
-慣性初速は最後の1レポートだけではなく、直近のジェスチャー速度から算出します。加速には素早く追従し、減速にはゆっくり追従するため、速いフリックの終端で指が自然に減速しても勢いが残ります。80msを超えて入力が途切れた場合や方向が反転した場合は、新しいジェスチャーとして速度履歴をリセットします。
+慣性初速は最後の1レポートだけではなく、実際のレポート間隔で時間正規化した直近のジェスチャー速度から算出します。RUN/RESTやレポート間引き設定が変わっても、同じ物理速度から極端に異なる慣性が生成されにくくなります。加速には素早く追従し、減速にはゆっくり追従するため、速いフリックの終端で指が自然に減速しても勢いが残ります。80msを超えて入力が途切れた場合や方向が反転した場合は、新しいジェスチャーとして速度履歴をリセットします。
 
 センサーを90度回転して搭載し、生のX軸を縦スクロールへ変換する場合は、センサーノードへ `vertical-scroll-uses-x-axis;` を追加してください。
 
@@ -235,7 +239,7 @@ inertial-scroll-layers = <6 7>;
 Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送されます。
 単純な反転命令ではなく、Centralで確定したON/OFF状態を明示的に配送します。
 `inertial-scroll-layers` が指定されたセンサーでは対象レイヤーだけを反転するため、
-通常のカーソル方向には影響しません。切替時には進行中の慣性を停止します。
+通常のカーソル方向には影響しません。方向トグルは `inertial-scroll` が有効なセンサーだけを対象とし、通常のポインター専用センサーには影響しません。慣性を使わないスクロール専用センサーを対象にする場合だけ、センサーノードへ `scroll-direction-toggle;` を追加してください。切替時には進行中の慣性を停止します。
 
 ## 横スクロール方向のトグルキー
 
@@ -251,13 +255,13 @@ Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送�
 &pmw3610_horizontal_scroll_direction_toggle
 ```
 
-縦方向と同様にGlobal Behaviorとして配送され、通常スクロールと慣性スクロールの両方へ反映されます。方向トグル自体は `inertial-scroll` の有無に依存しません。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
+縦方向と同様にGlobal Behaviorとして配送され、対象センサーの通常スクロールと慣性スクロールの両方へ反映されます。対象条件は縦方向と同じです。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
 
 ## 片側センサー構成
 
 PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。Behavior制御部は `CONFIG_PMW3610` とは独立してビルドされるため、センサーがCentralだけ、Peripheralだけ、または両側にある構成を利用できます。センサーのない側は状態同期だけを担当し、搭載側のセンサーへ設定を適用します。
 
-Split PeripheralはCentralのキーマップレイヤーを直接参照できないため、アクティブレイヤーを制御Behavior経由で同期します。これによりPeripheral側だけにセンサーがある場合も `inertial-scroll-layers` が機能します。切断中に変わったレイヤーとトグル状態は再接続検出後に再送されます（通常5秒以内）。
+Split PeripheralはCentralのキーマップレイヤーを直接参照できないため、アクティブレイヤーを制御Behavior経由で同期します。これによりPeripheral側だけにセンサーがある場合も `inertial-scroll-layers` が機能します。起動時とレイヤー・トグル変更時に同期し、失敗時は有限回再試行します。常時5秒ポーリングは行わないため、再試行終了後に再接続した場合は、次のレイヤー変更またはトグル操作で再同期されます。
 
 `CONFIG_SETTINGS=y` の構成では、慣性ON/OFF・縦方向・横方向の状態を保存し、再起動後に復元します。
 

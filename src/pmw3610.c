@@ -79,6 +79,12 @@ static bool pmw3610_supports_inertia(const struct device *dev) {
   return config->inertial_scroll;
 }
 
+static bool pmw3610_supports_scroll_direction(const struct device *dev) {
+  const struct pixart_config *config = dev->config;
+
+  return config->inertial_scroll || config->scroll_direction_toggle;
+}
+
 static int32_t pmw3610_abs32(int32_t value) {
   if (value == INT32_MIN) {
     return INT32_MAX;
@@ -107,6 +113,7 @@ static bool pmw3610_inertial_layer_active(const struct pixart_config *config) {
 }
 
 static void pmw3610_clear_inertia_locked(struct pixart_data *data) {
+  data->inertia_generation++;
   data->inertia_vx_q8 = 0;
   data->inertia_vy_q8 = 0;
   data->inertia_rx_q8 = 0;
@@ -117,7 +124,6 @@ static void pmw3610_clear_inertia_locked(struct pixart_data *data) {
 static void pmw3610_clear_gesture_velocity_locked(struct pixart_data *data) {
   data->gesture_vx_q8 = 0;
   data->gesture_vy_q8 = 0;
-  data->gesture_last_motion_ms = 0;
 }
 
 static void pmw3610_stop_inertia(struct pixart_data *data) {
@@ -238,6 +244,7 @@ static void pmw3610_begin_recovery(struct pixart_data *data) {
   data->dx = 0;
   data->dy = 0;
   data->report_error_count = 0;
+  data->no_motion_irq_count = 0;
   pmw3610_stop_inertia(data);
   pmw3610_reset_gesture_velocity(data);
   pmw3610_reset_micro_motion(data);
@@ -273,6 +280,18 @@ static int32_t pmw3610_filter_gesture_velocity(int32_t previous_q8,
   return (int32_t)(((int64_t)previous_q8 * previous_pct +
                     (int64_t)sample_q8 * (100 - previous_pct)) /
                    100);
+}
+
+static int32_t pmw3610_normalize_motion_q8(
+    int16_t sample, int64_t sample_interval_ms,
+    const struct pixart_config *config) {
+  sample_interval_ms =
+      CLAMP(sample_interval_ms, 1, PMW3610_INERTIA_GESTURE_TIMEOUT_MS);
+  int64_t normalized =
+      (int64_t)sample * PMW3610_INERTIA_SCALE *
+      config->inertial_scroll_interval_ms / sample_interval_ms;
+
+  return (int32_t)CLAMP(normalized, INT32_MIN, INT32_MAX);
 }
 
 static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
@@ -337,9 +356,7 @@ static bool pmw3610_inertia_active(const struct pixart_data *data,
   return pmw3610_abs32(data->inertia_vx_q8) >=
              config->inertial_scroll_threshold ||
          pmw3610_abs32(data->inertia_vy_q8) >=
-             config->inertial_scroll_threshold ||
-         pmw3610_abs32(data->inertia_rx_q8) >= PMW3610_INERTIA_SCALE ||
-         pmw3610_abs32(data->inertia_ry_q8) >= PMW3610_INERTIA_SCALE;
+             config->inertial_scroll_threshold;
 }
 
 static void pmw3610_schedule_inertia(struct pixart_data *data,
@@ -353,16 +370,21 @@ static void pmw3610_update_inertia_from_motion(
     int16_t ry) {
   k_mutex_lock(&data->inertia_mutex, K_FOREVER);
   int64_t now = k_uptime_get();
+  int64_t sample_interval_ms = config->inertial_scroll_interval_ms;
+  if (data->gesture_last_motion_ms != 0) {
+    sample_interval_ms = now - data->gesture_last_motion_ms;
+  }
   if (data->gesture_last_motion_ms == 0 ||
-      now - data->gesture_last_motion_ms >
-          PMW3610_INERTIA_GESTURE_TIMEOUT_MS) {
+      sample_interval_ms > PMW3610_INERTIA_GESTURE_TIMEOUT_MS) {
     pmw3610_clear_gesture_velocity_locked(data);
   }
 
   data->gesture_vx_q8 = pmw3610_filter_gesture_velocity(
-      data->gesture_vx_q8, (int32_t)rx * PMW3610_INERTIA_SCALE);
+      data->gesture_vx_q8,
+      pmw3610_normalize_motion_q8(rx, sample_interval_ms, config));
   data->gesture_vy_q8 = pmw3610_filter_gesture_velocity(
-      data->gesture_vy_q8, (int32_t)ry * PMW3610_INERTIA_SCALE);
+      data->gesture_vy_q8,
+      pmw3610_normalize_motion_q8(ry, sample_interval_ms, config));
   data->gesture_last_motion_ms = now;
 
   data->inertia_vx_q8 =
@@ -429,7 +451,8 @@ bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev) {
   k_mutex_lock(&data->inertia_mutex, K_FOREVER);
   bool inverted = data->vertical_scroll_inverted;
   k_mutex_unlock(&data->inertia_mutex);
-  return inverted && pmw3610_inertial_layer_active(config);
+  return pmw3610_supports_scroll_direction(dev) && inverted &&
+         pmw3610_inertial_layer_active(config);
 }
 
 bool pmw3610_horizontal_scroll_direction_is_inverted(
@@ -440,7 +463,8 @@ bool pmw3610_horizontal_scroll_direction_is_inverted(
   k_mutex_lock(&data->inertia_mutex, K_FOREVER);
   bool inverted = data->horizontal_scroll_inverted;
   k_mutex_unlock(&data->inertia_mutex);
-  return inverted && pmw3610_inertial_layer_active(config);
+  return pmw3610_supports_scroll_direction(dev) && inverted &&
+         pmw3610_inertial_layer_active(config);
 }
 
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value,
@@ -909,6 +933,12 @@ static void pmw3610_async_init(struct k_work *work) {
     data->async_init_step++;
 
     if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
+      /*
+       * Anchor the first motion sample to a real elapsed interval too. This
+       * prevents a REST sample accumulated after startup from being treated
+       * as one inertia tick.
+       */
+      data->gesture_last_motion_ms = k_uptime_get();
       data->ready = true; // sensor is ready to work
       LOG_INF("PMW3610 initialized");
       data->err = pmw3610_set_interrupt(dev, true);
@@ -951,8 +981,6 @@ static int pmw3610_report_data(const struct device *dev) {
     }
     return err;
   }
-  data->report_error_count = 0;
-
   // Check FAULT bit
   if (unlikely(buf[0] & PMW3610_MOTION_FAULT)) {
     LOG_WRN("Sensor fault detected");
@@ -962,8 +990,32 @@ static int pmw3610_report_data(const struct device *dev) {
 
   // Check MOT bit to ensure valid motion
   if (!(buf[0] & PMW3610_MOTION_MOT)) {
+    int irq_active = gpio_pin_get_dt(&config->irq_gpio);
+    if (irq_active < 0) {
+      LOG_ERR("Failed to read PMW3610 motion IRQ state: %d", irq_active);
+      pmw3610_begin_recovery(data);
+      return irq_active;
+    }
+
+    if (irq_active) {
+      data->no_motion_irq_count++;
+      LOG_WRN("Motion IRQ remained active without MOT data (%d/%d)",
+              data->no_motion_irq_count,
+              PMW3610_NO_MOTION_IRQ_RECOVERY_COUNT);
+      if (data->no_motion_irq_count >=
+          PMW3610_NO_MOTION_IRQ_RECOVERY_COUNT) {
+        LOG_ERR("Stuck PMW3610 motion IRQ; restarting sensor");
+        pmw3610_begin_recovery(data);
+        return -EIO;
+      }
+    } else {
+      data->report_error_count = 0;
+      data->no_motion_irq_count = 0;
+    }
     return 0;
   }
+  data->report_error_count = 0;
+  data->no_motion_irq_count = 0;
 
 // 12-bit two's complement value to int16_t
 // adapted from
@@ -1134,9 +1186,9 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
   }
 
   int64_t now = k_uptime_get();
+  int64_t elapsed_ms = now - data->inertia_started_ms;
   if (data->inertia_started_ms == 0 ||
-      now - data->inertia_started_ms >=
-          config->inertial_scroll_max_duration_ms) {
+      elapsed_ms >= config->inertial_scroll_max_duration_ms) {
     pmw3610_clear_inertia_locked(data);
     pmw3610_clear_gesture_velocity_locked(data);
     k_mutex_unlock(&data->inertia_mutex);
@@ -1152,17 +1204,22 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
                  config->inertial_scroll_decay_basis_points) /
                 10000);
 
+  int64_t remaining_ms =
+      config->inertial_scroll_max_duration_ms - elapsed_ms;
+  if (config->inertial_scroll_fade_duration_ms > 0 &&
+      remaining_ms <= config->inertial_scroll_fade_duration_ms) {
+    int64_t next_remaining_ms =
+        MAX(remaining_ms - config->inertial_scroll_interval_ms, 0);
+    data->inertia_vx_q8 =
+        (int32_t)((int64_t)data->inertia_vx_q8 * next_remaining_ms /
+                  remaining_ms);
+    data->inertia_vy_q8 =
+        (int32_t)((int64_t)data->inertia_vy_q8 * next_remaining_ms /
+                  remaining_ms);
+  }
+
   int16_t sx = pmw3610_q8_to_step(&data->inertia_rx_q8, data->inertia_vx_q8);
   int16_t sy = pmw3610_q8_to_step(&data->inertia_ry_q8, data->inertia_vy_q8);
-
-  int emit_err = pmw3610_emit_input(dev, sx, sy);
-  if (emit_err) {
-    LOG_WRN("Input queue full; stopping PMW3610 inertia: %d", emit_err);
-    pmw3610_clear_inertia_locked(data);
-    pmw3610_clear_gesture_velocity_locked(data);
-    k_mutex_unlock(&data->inertia_mutex);
-    return;
-  }
 
   // Continue only while velocity is in the smooth zone (>= 1 step per tick),
   // or while we actually emitted a step this tick from accumulated remainder.
@@ -1173,8 +1230,31 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
       (pmw3610_abs32(data->inertia_vx_q8) >= PMW3610_INERTIA_SCALE ||
        pmw3610_abs32(data->inertia_vy_q8) >= PMW3610_INERTIA_SCALE ||
        sx != 0 || sy != 0);
+  bool should_continue =
+      pmw3610_inertia_active(data, config) && smooth_or_stepped;
+  uint32_t generation = data->inertia_generation;
 
-  if (pmw3610_inertia_active(data, config) && smooth_or_stepped) {
+  /*
+   * Input reporting can wait for the ZMK input queue. Do not hold the inertia
+   * mutex while emitting, so physical motion and control changes stay prompt.
+   */
+  k_mutex_unlock(&data->inertia_mutex);
+  int emit_err = pmw3610_emit_input(dev, sx, sy);
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+
+  if (generation != data->inertia_generation) {
+    k_mutex_unlock(&data->inertia_mutex);
+    return;
+  }
+  if (emit_err) {
+    LOG_WRN("Input queue full; stopping PMW3610 inertia: %d", emit_err);
+    pmw3610_clear_inertia_locked(data);
+    pmw3610_clear_gesture_velocity_locked(data);
+    k_mutex_unlock(&data->inertia_mutex);
+    return;
+  }
+
+  if (should_continue) {
     pmw3610_schedule_inertia(data, config);
   } else {
     pmw3610_clear_inertia_locked(data);
@@ -1243,6 +1323,8 @@ static int pmw3610_init(const struct device *dev) {
   data->vertical_scroll_inverted = false;
   data->horizontal_scroll_inverted = false;
   data->report_error_count = 0;
+  data->no_motion_irq_count = 0;
+  data->inertia_generation = 0;
   data->ready = false;
   data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
   data->init_retries = 0;
@@ -1367,6 +1449,19 @@ static const struct sensor_driver_api pmw3610_driver_api = {
               (.inertial_scroll_layers = NULL,                                 \
                .inertial_scroll_layer_count = 0,))
 
+#define PMW3610_VALIDATE_INERTIAL_LAYER(node_id, prop, idx)                    \
+  BUILD_ASSERT(DT_PROP_BY_IDX(node_id, prop, idx) < 32,                        \
+               "PMW3610 inertial-scroll-layers values must be below 32");     \
+  BUILD_ASSERT(DT_PROP_BY_IDX(node_id, prop, idx) < ZMK_KEYMAP_LAYERS_LEN,     \
+               "PMW3610 inertial-scroll-layers value exceeds keymap layers");
+
+#define PMW3610_VALIDATE_INERTIAL_LAYERS(n)                                    \
+  COND_CODE_1(                                                                \
+      DT_NODE_HAS_PROP(DT_DRV_INST(n), inertial_scroll_layers),               \
+      (DT_FOREACH_PROP_ELEM(DT_DRV_INST(n), inertial_scroll_layers,           \
+                            PMW3610_VALIDATE_INERTIAL_LAYER)),                 \
+      ())
+
 #define PMW3610_VALIDATE_CONFIG(n)                                              \
   BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), cpi) >= PMW3610_MIN_CPI &&              \
                    DT_PROP(DT_DRV_INST(n), cpi) <= PMW3610_MAX_CPI &&           \
@@ -1411,7 +1506,13 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       !DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                             \
           (DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms) > 0 &&      \
            DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms) <= 10000),  \
-      "PMW3610 inertial max duration must be 1..10000 ms")
+      "PMW3610 inertial max duration must be 1..10000 ms");                    \
+  BUILD_ASSERT(                                                                \
+      !DT_PROP(DT_DRV_INST(n), inertial_scroll) ||                             \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_fade_duration_ms) <=         \
+              DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms),        \
+      "PMW3610 inertial fade duration must not exceed max duration");         \
+  PMW3610_VALIDATE_INERTIAL_LAYERS(n)
 
 #define PMW3610_DEFINE(n)                                                      \
   PMW3610_VALIDATE_CONFIG(n);                                                  \
@@ -1438,6 +1539,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                     \
       .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),   \
       .inertial_scroll = DT_PROP(DT_DRV_INST(n), inertial_scroll),             \
+      .scroll_direction_toggle =                                               \
+          DT_PROP(DT_DRV_INST(n), scroll_direction_toggle),                    \
       .inertial_scroll_decay_basis_points =                                    \
           DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_basis_points) > 0      \
               ? DT_PROP(DT_DRV_INST(n), inertial_scroll_decay_basis_points)    \
@@ -1452,6 +1555,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
           DT_PROP(DT_DRV_INST(n), inertial_scroll_max_velocity),               \
       .inertial_scroll_max_duration_ms =                                       \
           DT_PROP(DT_DRV_INST(n), inertial_scroll_max_duration_ms),            \
+      .inertial_scroll_fade_duration_ms =                                      \
+          DT_PROP(DT_DRV_INST(n), inertial_scroll_fade_duration_ms),           \
       .vertical_scroll_uses_x_axis =                                           \
           DT_PROP(DT_DRV_INST(n), vertical_scroll_uses_x_axis),                 \
       PMW3610_INIT_INERTIAL_LAYERS(n)                                          \
@@ -1496,7 +1601,11 @@ void pmw3610_set_inertial_scroll_all(bool enabled) {
 
 void pmw3610_set_vertical_scroll_direction_all(bool inverted) {
   for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
-    struct pixart_data *data = pmw3610_devs[i]->data;
+    const struct device *dev = pmw3610_devs[i];
+    if (!pmw3610_supports_scroll_direction(dev)) {
+      continue;
+    }
+    struct pixart_data *data = dev->data;
     k_mutex_lock(&data->inertia_mutex, K_FOREVER);
     if (data->vertical_scroll_inverted == inverted) {
       k_mutex_unlock(&data->inertia_mutex);
@@ -1513,7 +1622,11 @@ void pmw3610_set_vertical_scroll_direction_all(bool inverted) {
 
 void pmw3610_toggle_vertical_scroll_direction_all(void) {
   for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
-    struct pixart_data *data = pmw3610_devs[i]->data;
+    const struct device *dev = pmw3610_devs[i];
+    if (!pmw3610_supports_scroll_direction(dev)) {
+      continue;
+    }
+    struct pixart_data *data = dev->data;
     k_mutex_lock(&data->inertia_mutex, K_FOREVER);
     data->vertical_scroll_inverted = !data->vertical_scroll_inverted;
     pmw3610_clear_inertia_locked(data);
@@ -1525,7 +1638,11 @@ void pmw3610_toggle_vertical_scroll_direction_all(void) {
 
 void pmw3610_set_horizontal_scroll_direction_all(bool inverted) {
   for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
-    struct pixart_data *data = pmw3610_devs[i]->data;
+    const struct device *dev = pmw3610_devs[i];
+    if (!pmw3610_supports_scroll_direction(dev)) {
+      continue;
+    }
+    struct pixart_data *data = dev->data;
     k_mutex_lock(&data->inertia_mutex, K_FOREVER);
     if (data->horizontal_scroll_inverted == inverted) {
       k_mutex_unlock(&data->inertia_mutex);
@@ -1542,7 +1659,11 @@ void pmw3610_set_horizontal_scroll_direction_all(bool inverted) {
 
 void pmw3610_toggle_horizontal_scroll_direction_all(void) {
   for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
-    struct pixart_data *data = pmw3610_devs[i]->data;
+    const struct device *dev = pmw3610_devs[i];
+    if (!pmw3610_supports_scroll_direction(dev)) {
+      continue;
+    }
+    struct pixart_data *data = dev->data;
     k_mutex_lock(&data->inertia_mutex, K_FOREVER);
     data->horizontal_scroll_inverted = !data->horizontal_scroll_inverted;
     pmw3610_clear_inertia_locked(data);

@@ -72,7 +72,7 @@ config PMW3610_SMART_ALGORITHM
 config PMW3610_RUN_DOWNSHIFT_TIME_MS
     int "PMW3610's default RUN mode downshift time"
     default 128
-    range 13 3264
+    range 32 3264
     help
       Default RUN mode downshift down time in milliseconds.
       Time after which sensor goes from RUN to REST1 mode.

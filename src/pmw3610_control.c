@@ -43,7 +43,10 @@ BUILD_ASSERT(ZMK_KEYMAP_LAYERS_LEN <= 32,
 
 static atomic_t control_state =
     ATOMIC_INIT(PMW3610_CONTROL_STATE_INERTIA);
+#if !IS_ENABLED(CONFIG_ZMK_SPLIT) ||                                          \
+    !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 static atomic_t remote_layer_mask = ATOMIC_INIT(BIT(0));
+#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
 static struct k_work_delayable settings_save_work;
@@ -55,18 +58,19 @@ static struct k_work_delayable settings_save_work;
 #include <zmk/split/central.h>
 #include <zmk/split/transport/central.h>
 
-BUILD_ASSERT(ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT <= 32,
-             "PMW3610 split synchronization supports up to 32 peripherals");
+BUILD_ASSERT(ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT < 32,
+             "PMW3610 split synchronization supports up to 31 peripherals");
 
-#define PMW3610_SYNC_IDLE_INTERVAL K_SECONDS(5)
 #define PMW3610_SYNC_CHANGE_DELAY K_MSEC(100)
+#define PMW3610_SYNC_RETRY_INTERVAL K_SECONDS(1)
+#define PMW3610_SYNC_MAX_RETRIES 5
 
 extern const struct zmk_split_transport_central *active_transport;
 
 static struct k_work_delayable split_sync_work;
 static atomic_t dirty_sources =
     ATOMIC_INIT(BIT_MASK(ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT));
-static uint32_t connected_sources;
+static uint8_t split_sync_retry_count;
 
 static void pmw3610_control_schedule_split_sync(k_timeout_t delay) {
   k_work_reschedule(&split_sync_work, delay);
@@ -125,10 +129,8 @@ static void pmw3610_control_split_sync_work(struct k_work *work) {
     }
   }
 
-  uint32_t newly_connected = current_sources & ~connected_sources;
   uint32_t sources_to_sync =
-      current_sources & ((uint32_t)atomic_get(&dirty_sources) |
-                         newly_connected);
+      current_sources & (uint32_t)atomic_get(&dirty_sources);
 
   for (uint8_t source = 0;
        source < ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT; source++) {
@@ -142,23 +144,22 @@ static void pmw3610_control_split_sync_work(struct k_work *work) {
               source, err);
       continue;
     }
-    /*
-     * A newly connected peripheral can be reported as connected before
-     * behavior discovery has completely settled. Keep it dirty for one more
-     * polling cycle so the full state is sent again.
-     */
-    if (!(newly_connected & BIT(source))) {
-      atomic_and(&dirty_sources, ~BIT(source));
-    }
+    atomic_and(&dirty_sources, ~BIT(source));
   }
 
-  connected_sources = current_sources;
-  pmw3610_control_schedule_split_sync(PMW3610_SYNC_IDLE_INTERVAL);
+  if (atomic_get(&dirty_sources) != 0 &&
+      split_sync_retry_count < PMW3610_SYNC_MAX_RETRIES) {
+    split_sync_retry_count++;
+    pmw3610_control_schedule_split_sync(PMW3610_SYNC_RETRY_INTERVAL);
+  } else {
+    split_sync_retry_count = 0;
+  }
 }
 
 static void pmw3610_control_mark_split_dirty(void) {
   atomic_or(&dirty_sources,
             BIT_MASK(ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT));
+  split_sync_retry_count = 0;
   pmw3610_control_schedule_split_sync(PMW3610_SYNC_CHANGE_DELAY);
 }
 #else
@@ -298,7 +299,12 @@ int pmw3610_control_apply(enum pmw3610_control_kind kind, int32_t command,
     if (kind != PMW3610_CONTROL_INERTIA) {
       return -ENOTSUP;
     }
+#if !IS_ENABLED(CONFIG_ZMK_SPLIT) ||                                          \
+    !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     atomic_set(&remote_layer_mask, (uint32_t)value);
+#else
+    ARG_UNUSED(value);
+#endif
     return 0;
   default:
     return -ENOTSUP;
@@ -306,10 +312,15 @@ int pmw3610_control_apply(enum pmw3610_control_kind kind, int32_t command,
 }
 
 bool pmw3610_control_remote_layer_active(uint8_t layer) {
-  if (layer >= 32) {
+  if (layer >= ZMK_KEYMAP_LAYERS_LEN) {
     return false;
   }
+#if IS_ENABLED(CONFIG_ZMK_SPLIT) &&                                           \
+    IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+  return zmk_keymap_layer_active(layer);
+#else
   return atomic_get(&remote_layer_mask) & BIT(layer);
+#endif
 }
 
 #if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)

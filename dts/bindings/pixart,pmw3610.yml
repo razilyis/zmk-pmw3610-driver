@@ -62,6 +62,9 @@ properties:
   inertial-scroll:
     type: boolean
     description: "Enable inertial scrolling when this sensor is configured as a scroll device."
+  scroll-direction-toggle:
+    type: boolean
+    description: "Allow the scroll direction toggle behaviors to affect this sensor even when inertial-scroll is disabled."
   inertial-scroll-decay-pct:
     type: int
     default: 99
@@ -90,6 +93,10 @@ properties:
     type: int
     default: 1800
     description: "Maximum duration in milliseconds of one inertial tail."
+  inertial-scroll-fade-duration-ms:
+    type: int
+    default: 250
+    description: "Duration of the linear fade applied before the inertial maximum duration is reached."
   inertial-scroll-layers:
     type: array
     description: "List of active ZMK layer numbers where inertial scrolling is allowed. Omit this property to allow all layers."

@@ -40,6 +40,8 @@ struct pixart_data {
   int async_init_step;
   uint8_t init_retries; // counter for async init retries
   uint8_t report_error_count;
+  uint8_t no_motion_irq_count;
+  uint32_t inertia_generation;
   int32_t inertia_vx_q8;
   int32_t inertia_vy_q8;
   int32_t inertia_rx_q8;
@@ -81,12 +83,14 @@ struct pixart_config {
   bool force_awake;
   bool force_awake_4ms_mode;
   bool inertial_scroll;
+  bool scroll_direction_toggle;
   uint16_t inertial_scroll_decay_basis_points;
   uint16_t inertial_scroll_interval_ms;
   uint16_t inertial_scroll_threshold;
   uint16_t inertial_scroll_gain_pct;
   uint16_t inertial_scroll_max_velocity;
   uint16_t inertial_scroll_max_duration_ms;
+  uint16_t inertial_scroll_fade_duration_ms;
   bool vertical_scroll_uses_x_axis;
   const uint8_t *inertial_scroll_layers;
   size_t inertial_scroll_layer_count;
