@@ -35,6 +35,24 @@ config PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS
     Default minimum init power up delay is 10ms.
     Use this config to postpone init power up sequence if needs longer bootup time.
 
+config PMW3610_INIT_RETRY_BACKOFF_MS
+  int "Delay after an exhausted PMW3610 initialization retry burst (ms)"
+  default 1000
+  range 100 10000
+  help
+    Delay before restarting the full sensor initialization sequence after
+    three retries have been exhausted. The retry runs asynchronously, so
+    keyboard input remains available while the sensor recovers.
+
+config PMW3610_INPUT_REPORT_TIMEOUT_MS
+  int "Maximum PMW3610 input queue wait (ms)"
+  default 5
+  range 1 20
+  help
+    Maximum time the driver waits for each input event to enter Zephyr's input
+    queue. A finite timeout prevents a stalled input consumer from blocking the
+    system work queue indefinitely.
+
 config PMW3610_REPORT_INTERVAL_MIN
 	int "PMW3610's default minimum report rate"
 	default 0

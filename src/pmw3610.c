@@ -149,8 +149,10 @@ static void pmw3610_reset_micro_motion(struct pixart_data *data) {
 static int16_t pmw3610_stabilize_micro_axis(
     int16_t value, int16_t *pending, int8_t *direction,
     int64_t *last_motion_ms, const struct pixart_config *config, int64_t now) {
-  if (*last_motion_ms > 0 &&
-      now - *last_motion_ms > config->low_speed_stabilizer_timeout_ms) {
+  bool direction_history_expired =
+      *last_motion_ms > 0 &&
+      now - *last_motion_ms > config->low_speed_stabilizer_timeout_ms;
+  if (direction_history_expired) {
     *pending = 0;
     *direction = 0;
   }
@@ -161,6 +163,17 @@ static int16_t pmw3610_stabilize_micro_axis(
 
   *last_motion_ms = now;
   int8_t value_direction = value > 0 ? 1 : -1;
+
+  /*
+   * Do not delay the first micro movement after startup or an idle pause.
+   * Confirmation is only needed for a genuine reversal of an established
+   * direction, where it filters one-sample sensor bounce.
+   */
+  if (*direction == 0) {
+    *pending = 0;
+    *direction = value_direction;
+    return value;
+  }
 
   if (pmw3610_abs32(value) > config->low_speed_stabilizer_threshold) {
     *pending = 0;
@@ -266,6 +279,7 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
   const struct pixart_config *config = dev->config;
   bool have_x = x != 0;
   bool have_y = y != 0;
+  k_timeout_t timeout = K_MSEC(CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS);
   int err;
 
   if (!have_x && !have_y) {
@@ -274,20 +288,34 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
 
   /*
    * Keep a two-axis sample in one synchronized frame for smooth diagonal
-   * motion. Once an unsynchronized X event has entered the queue, wait for
-   * the matching Y event so X can never remain as a stale partial frame.
+   * motion. Every queue wait is finite so a stalled input consumer cannot
+   * block the system work queue indefinitely.
    */
   if (have_x) {
     err = input_report(dev, config->evt_type, config->x_input_code, x, !have_y,
-                       K_MSEC(1));
+                       timeout);
     if (err) {
       return err;
     }
   }
   if (have_y) {
     err = input_report(dev, config->evt_type, config->y_input_code, y, true,
-                       have_x ? K_FOREVER : K_MSEC(1));
+                       timeout);
     if (err) {
+      if (have_x) {
+        /*
+         * X was queued without sync. Close that partial frame with a neutral
+         * event when possible so it cannot be merged into unrelated motion.
+         * This recovery attempt is also bounded.
+         */
+        int flush_err =
+            input_report(dev, config->evt_type, config->x_input_code, 0, true,
+                         timeout);
+        if (flush_err) {
+          LOG_WRN("Failed to close partial PMW3610 input frame: %d",
+                  flush_err);
+        }
+      }
       return err;
     }
   }
@@ -860,16 +888,20 @@ static void pmw3610_async_init(struct k_work *work) {
       k_work_schedule(&data->init_work, K_MSEC(100));
     } else {
       LOG_ERR("PMW3610 initialization failed in step %d after 3 retries. "
-              "Backing off for 10 seconds...",
-              data->async_init_step);
-      // Prevent permanent failure (bricking) but do not spam the SPI bus.
-      // Reset retries and back off for a longer period (10 seconds), after
-      // which we'll try initializing again.
+              "Retrying the full sequence in %d ms...",
+              data->async_init_step, CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS);
+      /*
+       * Prevent a tight SPI retry loop without making a temporary sensor
+       * failure look like a ten-second freeze. This remains asynchronous, so
+       * the keyboard and the other split half continue to work.
+       */
       data->init_retries = 0;
       data->async_init_step =
           ASYNC_INIT_STEP_POWER_UP; // Restart the entire initialization flow
                                     // from the beginning
-      k_work_schedule(&data->init_work, K_SECONDS(10));
+      k_work_schedule(
+          &data->init_work,
+          K_MSEC(CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS));
     }
   } else {
 

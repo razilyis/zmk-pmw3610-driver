@@ -187,9 +187,16 @@ inertial-scroll-layers = <6 7>;
 |---|---|---|---|
 | `low-speed-stabilizer` | boolean | — | 低速マイクロモーション安定化を有効化する |
 | `low-speed-stabilizer-threshold` | int | 1 | マイクロモーションとして扱う最大絶対値 |
-| `low-speed-stabilizer-timeout-ms` | int | 30 | 無入力後に方向履歴をリセットする時間 |
+| `low-speed-stabilizer-timeout-ms` | int | 30 | 無入力後に方向履歴をリセットする時間。停止後の最初の微小入力は保留せず出力する |
 
 同方向の小さな入力は確認後に距離を保持したまま出力し、単発の逆方向入力は一旦保留します。次の入力が元の方向へ戻ればノイズとして相殺し、逆方向が続けば意図した方向転換としてまとめて出力します。`inertial-scroll-layers`で指定したスクロールレイヤーでは自動的にバイパスされます。
+
+### 安全・復旧関連のKconfig
+
+| 設定 | デフォルト | 説明 |
+|---|---|---|
+| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 5 | 入力キューへ1イベントを追加するときの最大待機時間（1〜20ms）。入力処理異常時のworkqueue停止を防ぐ |
+| `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` | 1000 | 初期化を3回再試行しても失敗した場合、初期化全体をやり直すまでの待機時間（100〜10000ms） |
 
 ---
 
