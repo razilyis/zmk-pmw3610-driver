@@ -50,6 +50,7 @@ struct pixart_data {
   int32_t gesture_vy_q8;
   int64_t gesture_last_motion_ms;
   int64_t inertia_started_ms;
+  int64_t performance_mode_disabled_ms;
   int16_t micro_x_pending;
   int16_t micro_y_pending;
   int64_t micro_x_last_motion_ms;
@@ -59,6 +60,7 @@ struct pixart_data {
   bool inertial_scroll_enabled;
   bool vertical_scroll_inverted;
   bool horizontal_scroll_inverted;
+  bool performance_mode_enabled;
 
   bool ready; // whether init is finished successfully
   int err;    // error code during async init

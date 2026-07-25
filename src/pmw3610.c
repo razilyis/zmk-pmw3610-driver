@@ -285,13 +285,53 @@ static int32_t pmw3610_filter_gesture_velocity(int32_t previous_q8,
 static int32_t pmw3610_normalize_motion_q8(
     int16_t sample, int64_t sample_interval_ms,
     const struct pixart_config *config) {
-  sample_interval_ms =
-      CLAMP(sample_interval_ms, 1, PMW3610_INERTIA_GESTURE_TIMEOUT_MS);
+  int64_t max_sample_interval_ms =
+      MAX(PMW3610_INERTIA_GESTURE_TIMEOUT_MS,
+          MAX(CONFIG_PMW3610_REST1_SAMPLE_TIME_MS,
+              MAX(CONFIG_PMW3610_REST2_SAMPLE_TIME_MS,
+                  CONFIG_PMW3610_REST3_SAMPLE_TIME_MS)));
+  sample_interval_ms = CLAMP(sample_interval_ms, 1, max_sample_interval_ms);
   int64_t normalized =
       (int64_t)sample * PMW3610_INERTIA_SCALE *
       config->inertial_scroll_interval_ms / sample_interval_ms;
 
   return (int32_t)CLAMP(normalized, INT32_MIN, INT32_MAX);
+}
+
+static int64_t pmw3610_first_gesture_sample_interval_ms(
+    const struct pixart_config *config, int64_t now,
+    int64_t time_since_last_motion_ms, bool performance_mode_enabled,
+    int64_t performance_mode_disabled_ms) {
+  int64_t run_interval_ms = config->force_awake_4ms_mode ? 4 : 8;
+  int64_t report_interval_ms =
+      MAX(run_interval_ms, CONFIG_PMW3610_REPORT_INTERVAL_MIN);
+
+  if (performance_mode_enabled) {
+    return report_interval_ms;
+  }
+
+  int64_t low_power_elapsed_ms = time_since_last_motion_ms;
+  if (config->force_awake && performance_mode_disabled_ms > 0) {
+    low_power_elapsed_ms = now - performance_mode_disabled_ms;
+  }
+
+  int64_t sample_interval_ms;
+  if (low_power_elapsed_ms < CONFIG_PMW3610_RUN_DOWNSHIFT_TIME_MS) {
+    sample_interval_ms = run_interval_ms;
+  } else if (low_power_elapsed_ms <
+             (int64_t)CONFIG_PMW3610_RUN_DOWNSHIFT_TIME_MS +
+                 (int64_t)CONFIG_PMW3610_REST1_DOWNSHIFT_TIME_MS) {
+    sample_interval_ms = CONFIG_PMW3610_REST1_SAMPLE_TIME_MS;
+  } else if (low_power_elapsed_ms <
+             (int64_t)CONFIG_PMW3610_RUN_DOWNSHIFT_TIME_MS +
+                 (int64_t)CONFIG_PMW3610_REST1_DOWNSHIFT_TIME_MS +
+                 (int64_t)CONFIG_PMW3610_REST2_DOWNSHIFT_TIME_MS) {
+    sample_interval_ms = CONFIG_PMW3610_REST2_SAMPLE_TIME_MS;
+  } else {
+    sample_interval_ms = CONFIG_PMW3610_REST3_SAMPLE_TIME_MS;
+  }
+
+  return MAX(sample_interval_ms, report_interval_ms);
 }
 
 static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y) {
@@ -367,16 +407,22 @@ static void pmw3610_schedule_inertia(struct pixart_data *data,
 
 static void pmw3610_update_inertia_from_motion(
     struct pixart_data *data, const struct pixart_config *config, int16_t rx,
-    int16_t ry) {
+    int16_t ry, int64_t motion_time_ms, bool performance_mode_enabled,
+    int64_t performance_mode_disabled_ms) {
   k_mutex_lock(&data->inertia_mutex, K_FOREVER);
-  int64_t now = k_uptime_get();
+  int64_t now = motion_time_ms;
   int64_t sample_interval_ms = config->inertial_scroll_interval_ms;
   if (data->gesture_last_motion_ms != 0) {
     sample_interval_ms = now - data->gesture_last_motion_ms;
   }
-  if (data->gesture_last_motion_ms == 0 ||
-      sample_interval_ms > PMW3610_INERTIA_GESTURE_TIMEOUT_MS) {
+  bool new_gesture =
+      data->gesture_last_motion_ms == 0 ||
+      sample_interval_ms > PMW3610_INERTIA_GESTURE_TIMEOUT_MS;
+  if (new_gesture) {
     pmw3610_clear_gesture_velocity_locked(data);
+    sample_interval_ms = pmw3610_first_gesture_sample_interval_ms(
+        config, now, sample_interval_ms, performance_mode_enabled,
+        performance_mode_disabled_ms);
   }
 
   data->gesture_vx_q8 = pmw3610_filter_gesture_velocity(
@@ -387,21 +433,18 @@ static void pmw3610_update_inertia_from_motion(
       pmw3610_normalize_motion_q8(ry, sample_interval_ms, config));
   data->gesture_last_motion_ms = now;
 
-  data->inertia_vx_q8 =
-      (int32_t)(((int64_t)data->gesture_vx_q8 *
-                 config->inertial_scroll_gain_pct) /
-                100);
-  data->inertia_vy_q8 =
-      (int32_t)(((int64_t)data->gesture_vy_q8 *
-                 config->inertial_scroll_gain_pct) /
-                100);
-
   int32_t max_velocity_q8 =
       (int32_t)config->inertial_scroll_max_velocity * PMW3610_INERTIA_SCALE;
+  int64_t scaled_vx_q8 =
+      (int64_t)data->gesture_vx_q8 * config->inertial_scroll_gain_pct / 100;
+  int64_t scaled_vy_q8 =
+      (int64_t)data->gesture_vy_q8 * config->inertial_scroll_gain_pct / 100;
   data->inertia_vx_q8 =
-      CLAMP(data->inertia_vx_q8, -max_velocity_q8, max_velocity_q8);
+      (int32_t)CLAMP(scaled_vx_q8, -(int64_t)max_velocity_q8,
+                     (int64_t)max_velocity_q8);
   data->inertia_vy_q8 =
-      CLAMP(data->inertia_vy_q8, -max_velocity_q8, max_velocity_q8);
+      (int32_t)CLAMP(scaled_vy_q8, -(int64_t)max_velocity_q8,
+                     (int64_t)max_velocity_q8);
 
   if (pmw3610_inertia_active(data, config)) {
     data->inertia_started_ms = now;
@@ -744,6 +787,7 @@ static int pmw3610_set_downshift_time(const struct device *dev,
 
 static int pmw3610_set_performance(const struct device *dev, bool enabled) {
   const struct pixart_config *config = dev->config;
+  struct pixart_data *data = dev->data;
   int err = 0;
 
   if (config->force_awake) {
@@ -780,6 +824,12 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
     }
     LOG_INF("%s performance mode", enabled ? "enable" : "disable");
   }
+
+  k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+  data->performance_mode_enabled = config->force_awake && enabled;
+  data->performance_mode_disabled_ms =
+      data->performance_mode_enabled ? 0 : k_uptime_get();
+  k_mutex_unlock(&data->inertia_mutex);
 
   return err;
 }
@@ -965,9 +1015,7 @@ static int pmw3610_report_data(const struct device *dev) {
     return -EBUSY;
   }
 
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
   int64_t now = k_uptime_get();
-#endif
 
   int err =
       pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
@@ -1117,8 +1165,15 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
     data->dx = 0;
     data->dy = 0;
-    if (pmw3610_inertial_scroll_is_enabled(dev)) {
+    bool inertia_was_enabled = pmw3610_inertial_scroll_is_enabled(dev);
+    bool performance_mode_enabled = false;
+    int64_t performance_mode_disabled_ms = 0;
+    if (inertia_was_enabled) {
       pmw3610_stop_inertia(data);
+      k_mutex_lock(&data->inertia_mutex, K_FOREVER);
+      performance_mode_enabled = data->performance_mode_enabled;
+      performance_mode_disabled_ms = data->performance_mode_disabled_ms;
+      k_mutex_unlock(&data->inertia_mutex);
     }
 
     err = pmw3610_emit_input(dev, rx, ry);
@@ -1129,8 +1184,11 @@ static int pmw3610_report_data(const struct device *dev) {
       return err;
     }
 
-    if (pmw3610_inertial_scroll_is_enabled(dev)) {
-      pmw3610_update_inertia_from_motion(data, config, rx, ry);
+    if (inertia_was_enabled &&
+        pmw3610_inertial_scroll_is_enabled(dev)) {
+      pmw3610_update_inertia_from_motion(
+          data, config, rx, ry, now, performance_mode_enabled,
+          performance_mode_disabled_ms);
     }
   }
 
@@ -1319,9 +1377,11 @@ static int pmw3610_init(const struct device *dev) {
   data->gesture_vy_q8 = 0;
   data->gesture_last_motion_ms = 0;
   data->inertia_started_ms = 0;
+  data->performance_mode_disabled_ms = k_uptime_get();
   pmw3610_reset_micro_motion(data);
   data->vertical_scroll_inverted = false;
   data->horizontal_scroll_inverted = false;
+  data->performance_mode_enabled = false;
   data->report_error_count = 0;
   data->no_motion_irq_count = 0;
   data->inertia_generation = 0;

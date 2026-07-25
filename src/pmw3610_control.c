@@ -70,7 +70,7 @@ extern const struct zmk_split_transport_central *active_transport;
 static struct k_work_delayable split_sync_work;
 static atomic_t dirty_sources =
     ATOMIC_INIT(BIT_MASK(ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT));
-static uint8_t split_sync_retry_count;
+static atomic_t split_sync_retry_count = ATOMIC_INIT(0);
 
 static void pmw3610_control_schedule_split_sync(k_timeout_t delay) {
   k_work_reschedule(&split_sync_work, delay);
@@ -148,18 +148,18 @@ static void pmw3610_control_split_sync_work(struct k_work *work) {
   }
 
   if (atomic_get(&dirty_sources) != 0 &&
-      split_sync_retry_count < PMW3610_SYNC_MAX_RETRIES) {
-    split_sync_retry_count++;
+      atomic_get(&split_sync_retry_count) < PMW3610_SYNC_MAX_RETRIES) {
+    atomic_inc(&split_sync_retry_count);
     pmw3610_control_schedule_split_sync(PMW3610_SYNC_RETRY_INTERVAL);
   } else {
-    split_sync_retry_count = 0;
+    atomic_set(&split_sync_retry_count, 0);
   }
 }
 
 static void pmw3610_control_mark_split_dirty(void) {
   atomic_or(&dirty_sources,
             BIT_MASK(ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT));
-  split_sync_retry_count = 0;
+  atomic_set(&split_sync_retry_count, 0);
   pmw3610_control_schedule_split_sync(PMW3610_SYNC_CHANGE_DELAY);
 }
 #else
