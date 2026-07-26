@@ -1,37 +1,39 @@
 # zmk-pmw3610-driver — Dev-v0.3_inertial-scroll
 
-## Credits & Respect
+English | [日本語](README_JA.md)
+
+## Credits and Respect
 
 This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver).
 
-badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad) and [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver) to create a well-structured PMW3610 driver for ZMK v0.3 — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. His work laid the foundation for trackball integration in ZMK, and this branch would not exist without it. Deep respect and gratitude to badjeff for his contributions to the community.
+badjeff built upon [ufan's ZMK PixArt sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad) and [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver) to create a well-structured PMW3610 driver for ZMK v0.3, with split peripheral support, per-sensor devicetree configuration, and shared SPI bus compatibility. That work laid the foundation for trackball integration in ZMK, and this branch would not exist without it. Deep respect and gratitude to badjeff for these contributions to the community.
 
-このブランチはその実装をベースに、以下の追加改良を加えたものです。
-
----
-
-## このブランチ (Dev-v0.3_inertial-scroll) の概要
-
-### 安定性・電源管理の改善
-
-- **レベルトリガ割り込み**: エッジトリガではなくレベルトリガ (`GPIO_INT_LEVEL_ACTIVE`) を採用し、割り込み無効期間中のモーションイベント取りこぼしを防止。
-- **フェイルセーフ初期化**: SPI 初期化失敗時に最大3回リトライし、連続失敗時はデフォルト1秒のバックオフ後に初期化を最初からやり直す。バックオフ時間は `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` で変更できる。
-- **FAULT リカバリ & ジャンプ防止**: FAULT 検知時に蓄積済みの移動量 (`dx`, `dy`) と慣性状態を破棄し、復帰後のカーソル暴走を防止。
-- **入力キュー保護**: X/Y の斜め移動を1つの同期レポートに保ち、X投入後は対応するYが入るまで待つことで、未完了イベントが後から混入することを防止。
-- **慣性状態の排他制御**: 慣性ワーク、トグル、FAULT復旧が同時に走っても、停止後に古い慣性ワークが状態を再生成しないよう保護。
-- **IDLE 省電力の修正**: `force_awake_4ms_mode` が IDLE 移行後も4ms レートを維持し続けるバグを修正。IDLE 時は正しく 8ms デフォルトレートに落ちて省電力動作する。
-
-### ドライバーサイド慣性スクロール
-
-PMW3610 をスクロールデバイスとして使うレイヤーで、指を離した後もスクロールが慣性で継続する機能をドライバ側で実装しています。
+This branch adds the improvements described below.
 
 ---
 
-## インストール
+## Dev-v0.3_inertial-scroll overview
 
-### 1. west.yml への追加
+### Stability and power management
 
-`config/west.yml` に以下を追加します：
+- **Level-triggered interrupt:** Uses `GPIO_INT_LEVEL_ACTIVE` instead of an edge trigger to avoid losing motion events while the interrupt is disabled.
+- **Fail-safe initialization:** Retries a failed SPI initialization up to three times. After the retry burst is exhausted, it restarts initialization after a one-second backoff by default. Configure the delay with `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS`.
+- **FAULT recovery and jump prevention:** Discards accumulated movement (`dx`, `dy`) and inertia state after a FAULT so that recovery cannot produce a pointer jump.
+- **Input queue protection:** Keeps diagonal X/Y movement in one synchronized report and waits for the matching Y event after X is queued, preventing incomplete events from leaking into a later report.
+- **Serialized inertia state:** Protects inertia work, toggles, and FAULT recovery from recreating stale inertia after it has been stopped.
+- **IDLE power fix:** Prevents `force-awake-4ms-mode` from retaining the 4 ms rate after entering IDLE. The sensor returns to its normal 8 ms default rate in IDLE to save power.
+
+### Driver-side inertial scrolling
+
+On layers where the PMW3610 is used as a scroll device, scrolling can continue with decaying momentum after the user releases the ball.
+
+---
+
+## Installation
+
+### 1. Add the module to west.yml
+
+Add the following entries to `config/west.yml`:
 
 ```yaml
 manifest:
@@ -46,9 +48,9 @@ manifest:
     path: config
 ```
 
-### 2. board overlay への追加
+### 2. Configure the board overlay
 
-`<board>.overlay` にセンサーの設定を追記します（ピン番号は基板に合わせて変更してください）：
+Add the sensor configuration to `<board>.overlay`. Change the pin assignments to match your hardware:
 
 ```dts
 &pinctrl {
@@ -90,27 +92,27 @@ manifest:
         x-input-code = <INPUT_REL_X>;
         y-input-code = <INPUT_REL_Y>;
 
-        /* ドリフトフィルタ: 0 で無効化 */
+        /* Drift filter. Set to 0 to disable. */
         motion-threshold = <1>;
 
-        /* 異常な単発移動量を破棄（任意、デフォルト 512） */
+        /* Reject abnormal single-sample movement. Optional; default 512. */
         max-motion-delta = <512>;
 
-        /* 慣性スクロール（任意） */
+        /* Inertial scrolling (optional). */
         inertial-scroll;
-        inertial-scroll-layers = <6 7>;   /* 有効にするレイヤー番号。省略時は全レイヤーで有効 */
+        inertial-scroll-layers = <6 7>; /* Enabled layers. Omit to enable on all layers. */
         inertial-scroll-gain-pct = <130>;
         inertial-scroll-decay-pct = <99>;
         inertial-scroll-interval-ms = <10>;
         inertial-scroll-threshold = <4>;
 
-        /* 省電力制御（任意） */
-        force-awake;          /* ACTIVE 時はセンサーを常時起動 */
-        force-awake-4ms-mode; /* ACTIVE 時に 4ms サンプリングを強制（USB 接続で 250Hz が必要な場合） */
+        /* Power control (optional). */
+        force-awake;          /* Keep the sensor awake while ZMK is ACTIVE. */
+        force-awake-4ms-mode; /* Force 4 ms sampling while ACTIVE for 250 Hz over USB. */
 
-        // swap-xy;   /* 任意: XY 軸の入れ替え */
-        // invert-x;  /* 任意: X 軸の反転 */
-        // invert-y;  /* 任意: Y 軸の反転 */
+        // swap-xy;   /* Optional: swap the X and Y axes. */
+        // invert-x;  /* Optional: invert the X axis. */
+        // invert-y;  /* Optional: invert the Y axis. */
     };
 };
 
@@ -122,170 +124,172 @@ manifest:
 };
 ```
 
-### 3. shield config への追加
+### 3. Configure the shield
 
-`<shield>.conf` に以下を追記します：
+Add the following options to `<shield>.conf`:
 
 ```conf
 CONFIG_SPI=y
 CONFIG_INPUT=y
 CONFIG_ZMK_POINTING=y
 CONFIG_PMW3610=y
-# CONFIG_PMW3610_REPORT_INTERVAL_MIN=12  # 任意: 最小レポート間隔 (ms)
-# CONFIG_PMW3610_LOG_LEVEL_DBG=y         # 任意: デバッグログ
-# CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=300  # トラブルシューティング参照
+# CONFIG_PMW3610_REPORT_INTERVAL_MIN=12  # Optional minimum report interval (ms)
+# CONFIG_PMW3610_LOG_LEVEL_DBG=y         # Optional debug logging
+# CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=300  # See troubleshooting notes
 ```
 
 ---
 
-## DTS プロパティ一覧
+## Devicetree properties
 
-### 基本設定
+### Basic configuration
 
-| プロパティ | 型 | デフォルト | 説明 |
+| Property | Type | Default | Description |
 |---|---|---|---|
-| `irq-gpios` | phandle-array | (必須) | モーション割り込み GPIO |
-| `cpi` | int | 600 | カウント/インチ（200〜3200、ステップ 200） |
-| `evt-type` | int | (必須) | 入力イベント種別（`INPUT_EV_REL` など） |
-| `x-input-code` | int | (必須) | X 軸の入力コード |
-| `y-input-code` | int | (必須) | Y 軸の入力コード |
-| `motion-threshold` | int | 1 | ドリフトフィルタ閾値。XとYの絶対値が両方ともこの値以下のサンプルを破棄。`0` で無効 |
-| `max-motion-delta` | int | 512 | XまたはYの絶対値がこの値以上の単発サンプルを破棄し、異常なカーソルジャンプや慣性生成を防ぐ（1〜2048） |
-| `swap-xy` | boolean | — | XY 軸を入れ替える |
-| `invert-x` | boolean | — | X 軸を反転する |
-| `invert-y` | boolean | — | Y 軸を反転する |
+| `irq-gpios` | phandle-array | required | Motion interrupt GPIO |
+| `cpi` | int | 600 | Counts per inch, from 200 to 3200 in steps of 200 |
+| `evt-type` | int | required | Input event type, such as `INPUT_EV_REL` |
+| `x-input-code` | int | required | X-axis input code |
+| `y-input-code` | int | required | Y-axis input code |
+| `motion-threshold` | int | 1 | Discard a sample when the absolute values of both X and Y are at or below this drift-filter threshold. Set to `0` to disable |
+| `max-motion-delta` | int | 512 | Discard a single sample when the absolute value of X or Y is at or above this value, preventing abnormal pointer jumps and inertia generation. Valid range: 1 to 2048 |
+| `swap-xy` | boolean | — | Swap the X and Y axes |
+| `invert-x` | boolean | — | Invert the X axis |
+| `invert-y` | boolean | — | Invert the Y axis |
 
-### 省電力制御
+### Power control
 
-| プロパティ | 型 | 説明 |
+| Property | Type | Description |
 |---|---|---|
-| `force-awake` | boolean | ZMK が ACTIVE 状態の間センサーを常時起動。IDLE/SLEEP 移行後は通常のダウンシフトに戻る |
-| `force-awake-4ms-mode` | boolean | `force-awake` 有効時に 4ms サンプリング（250Hz）を強制。USB 直結で高レートが必要な場合に使用 |
+| `force-awake` | boolean | Keep the sensor awake while ZMK is ACTIVE. Normal downshifting resumes in IDLE or SLEEP |
+| `force-awake-4ms-mode` | boolean | Force 4 ms sampling while `force-awake` is active. Intended for high-rate, direct USB use |
 
-### 慣性スクロール
+### Inertial scrolling
 
-| プロパティ | 型 | デフォルト | 説明 |
+| Property | Type | Default | Description |
 |---|---|---|---|
-| `inertial-scroll` | boolean | — | 慣性スクロールを有効化する |
-| `inertial-scroll-gain-pct` | int | 130 | 平滑化したジェスチャー速度から慣性初速を生成する際のゲイン（%）。大きいほど速くなる |
-| `inertial-scroll-decay-pct` | int | 99 | 毎 tick の速度減衰率（%）。小さいほど早く止まる |
-| `inertial-scroll-decay-basis-points` | int | 0 | 任意の高精度減衰率（0.01%単位）。`9920`は99.20%。0なら`decay-pct`を使用 |
-| `inertial-scroll-interval-ms` | int | 10 | 慣性スクロールの合成レポート間隔（ms） |
-| `inertial-scroll-threshold` | int | 4 | 慣性スクロールを停止する速度閾値（Q8 固定小数点単位） |
-| `inertial-scroll-max-velocity` | int | 32 | 慣性初速の上限（1 tickあたりのステップ数） |
-| `inertial-scroll-max-duration-ms` | int | 1800 | 1回の慣性スクロールを継続できる最大時間（ms） |
-| `inertial-scroll-fade-duration-ms` | int | 250 | 最大継続時間の直前に速度を線形フェードする時間（ms）。`0`で無効 |
-| `inertial-scroll-layers` | array | — | 慣性スクロールを有効にするレイヤー番号のリスト。省略時は全レイヤーで有効 |
-| `scroll-direction-toggle` | boolean | — | `inertial-scroll`を使わないスクロール専用センサーも方向トグルの対象にする |
-| `vertical-scroll-uses-x-axis` | boolean | false | 90度回転して搭載したセンサーで、生のX軸を縦スクロール方向トグルの対象にする |
+| `inertial-scroll` | boolean | — | Enable inertial scrolling |
+| `inertial-scroll-gain-pct` | int | 130 | Gain used to derive initial inertial velocity from the smoothed gesture velocity, in percent |
+| `inertial-scroll-decay-pct` | int | 99 | Velocity retained on each inertial tick, in percent. Smaller values stop sooner |
+| `inertial-scroll-decay-basis-points` | int | 0 | Optional high-precision retention in 0.01% units. For example, `9920` means 99.20%. A value of `0` uses `inertial-scroll-decay-pct` |
+| `inertial-scroll-interval-ms` | int | 10 | Interval between synthetic inertial scroll reports, in milliseconds |
+| `inertial-scroll-threshold` | int | 4 | Fixed-point Q8 velocity threshold below which inertial scrolling stops |
+| `inertial-scroll-max-velocity` | int | 32 | Maximum initial inertial velocity in whole scroll steps per tick |
+| `inertial-scroll-max-duration-ms` | int | 1800 | Maximum duration of one inertial tail, in milliseconds |
+| `inertial-scroll-fade-duration-ms` | int | 250 | Linear fade duration before the maximum inertial duration is reached. Set to `0` to disable |
+| `inertial-scroll-layers` | array | — | ZMK layer numbers where inertial scrolling is allowed. Omit to allow all layers |
+| `scroll-direction-toggle` | boolean | — | Allow direction-toggle behaviors to affect a scroll-only sensor that does not enable `inertial-scroll` |
+| `vertical-scroll-uses-x-axis` | boolean | false | Treat raw X as vertical and raw Y as horizontal for direction toggling on a sensor mounted with a 90-degree rotation |
 
-`inertial-scroll-layers` は、同じ PMW3610 をポインタとスクロールで兼用する場合に使います。スクロールレイヤーの番号だけを指定してください：
+Use `inertial-scroll-layers` when the same PMW3610 acts as both a pointer and a scroll device. List only the scroll layers:
 
 ```dts
 inertial-scroll-layers = <6 7>;
 ```
 
-慣性初速は最後の1レポートだけではなく、実際のレポート間隔で時間正規化した直近のジェスチャー速度から算出します。新しいジェスチャーの最初のレポートは、ACTIVE中ならRUN周期とレポート間引き設定、IDLE後なら経過時間から推定したRUN/REST周期を使用します。これにより短いフリックの勢いを保ちながら、REST復帰時に蓄積デルタから過剰な慣性が生成されるのを防ぎます。加速には素早く追従し、減速にはゆっくり追従するため、速いフリックの終端で指が自然に減速しても勢いが残ります。80msを超えて入力が途切れた場合や方向が反転した場合は、新しいジェスチャーとして速度履歴をリセットします。
+Initial inertial velocity is derived from recent gesture velocity normalized by the actual report interval, rather than from only the final report. For the first report of a new gesture, the driver estimates the sample period from the RUN period and report-throttling configuration while ACTIVE, or from the estimated RUN/REST timing after IDLE. This preserves short flicks without creating excessive inertia from accumulated movement after waking from REST.
 
-センサーを90度回転して搭載し、生のX軸を縦スクロールへ変換する場合は、センサーノードへ `vertical-scroll-uses-x-axis;` を追加してください。
+The filter follows acceleration quickly and deceleration gradually, preserving momentum when the user naturally slows at the end of a fast flick. An input gap longer than 80 ms or a direction reversal resets velocity history and begins a new gesture.
 
-### 低速カーソル安定化
+For a sensor mounted at 90 degrees where raw X becomes vertical scroll, add `vertical-scroll-uses-x-axis;` to the sensor node.
 
-| プロパティ | 型 | デフォルト | 説明 |
+### Low-speed pointer stabilization
+
+| Property | Type | Default | Description |
 |---|---|---|---|
-| `low-speed-stabilizer` | boolean | — | 低速マイクロモーション安定化を有効化する |
-| `low-speed-stabilizer-threshold` | int | 1 | マイクロモーションとして扱う最大絶対値 |
-| `low-speed-stabilizer-timeout-ms` | int | 30 | 無入力後に方向履歴をリセットする時間。停止後の最初の微小入力は保留せず出力する |
+| `low-speed-stabilizer` | boolean | — | Enable low-speed micro-motion stabilization |
+| `low-speed-stabilizer-threshold` | int | 1 | Largest absolute delta treated as micro motion |
+| `low-speed-stabilizer-timeout-ms` | int | 30 | Idle time before direction history is reset. The first micro movement after stopping is emitted immediately |
 
-同方向の小さな入力は確認後に距離を保持したまま出力し、単発の逆方向入力は一旦保留します。次の入力が元の方向へ戻ればノイズとして相殺し、逆方向が続けば意図した方向転換としてまとめて出力します。`inertial-scroll-layers`で指定したスクロールレイヤーでは自動的にバイパスされます。
+Repeated small movements in the same direction are emitted without losing distance. An isolated reversal is held for confirmation. If the following movement returns to the original direction, the reversal is treated as noise and cancelled; if the reversal continues, it is emitted as an intentional direction change. Stabilization is bypassed automatically on layers listed in `inertial-scroll-layers`.
 
-### 安全・復旧関連のKconfig
+### Safety and recovery Kconfig options
 
-| 設定 | デフォルト | 説明 |
+| Option | Default | Description |
 |---|---|---|
-| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 5 | 入力キューへ1イベントを追加するときの最大待機時間（1〜20ms）。入力処理異常時のworkqueue停止を防ぐ |
-| `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` | 1000 | 初期化を3回再試行しても失敗した場合、初期化全体をやり直すまでの待機時間（100〜10000ms） |
+| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 5 | Maximum time to wait for each event to enter the input queue, from 1 to 20 ms. Prevents a stalled input consumer from blocking the system work queue |
+| `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` | 1000 | Delay before restarting full initialization after three failed retries, from 100 to 10000 ms |
 
 ---
 
-## 慣性スクロールのトグルキー
+## Inertial scroll toggle behavior
 
-キーマップから慣性スクロールをオン/オフするゼロパラメータのビヘイビアを利用できます。
+The keymap can expose a zero-parameter behavior that toggles inertial scrolling.
 
-`.keymap` ファイルに以下を追加します：
+Include the behavior in the `.keymap` file:
 
 ```dts
 #include <behaviors/pmw3610_inertia_toggle.dtsi>
 ```
 
-任意のレイヤーのキーに割り当てます：
+Assign it to any key:
 
 ```dts
 &pmw3610_inertia_toggle
 ```
 
-## 縦スクロール方向のトグルキー
+## Vertical scroll direction toggle behavior
 
-縦スクロールの正転・逆転を切り替えるゼロパラメータのビヘイビアを利用できます。
-
-`.keymap` ファイルに以下を追加します：
+This zero-parameter behavior toggles the vertical scroll direction:
 
 ```dts
 #include <behaviors/pmw3610_scroll_direction_toggle.dtsi>
 ```
 
-任意のキーに割り当てます：
+Assign it to any key:
 
 ```dts
 &pmw3610_scroll_direction_toggle
 ```
 
-Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送されます。
-単純な反転命令ではなく、Centralで確定したON/OFF状態を明示的に配送します。
-`inertial-scroll-layers` が指定されたセンサーでは対象レイヤーだけを反転するため、
-通常のカーソル方向には影響しません。方向トグルは `inertial-scroll` が有効なセンサーだけを対象とし、通常のポインター専用センサーには影響しません。慣性を使わないスクロール専用センサーを対象にする場合だけ、センサーノードへ `scroll-direction-toggle;` を追加してください。切替時には進行中の慣性を停止します。
+In a split configuration, this is a Global Behavior delivered to both Central and Peripheral. The Central resolves the new ON/OFF state and sends that explicit state instead of sending a relative toggle command.
 
-## 横スクロール方向のトグルキー
+On sensors with `inertial-scroll-layers`, only the listed layers are affected, so normal pointer direction does not change. Direction toggles affect sensors with `inertial-scroll`; pointer-only sensors are not affected. Add `scroll-direction-toggle;` only when a scroll-only sensor without inertia must also respond. Changing direction stops any active inertial tail.
 
-横スクロールの正転・逆転を切り替えるゼロパラメータのビヘイビアを利用できます。
+## Horizontal scroll direction toggle behavior
+
+This zero-parameter behavior toggles the horizontal scroll direction:
 
 ```dts
 #include <behaviors/pmw3610_horizontal_scroll_direction_toggle.dtsi>
 ```
 
-任意のキーに割り当てます：
+Assign it to any key:
 
 ```dts
 &pmw3610_horizontal_scroll_direction_toggle
 ```
 
-縦方向と同様にGlobal Behaviorとして配送され、対象センサーの通常スクロールと慣性スクロールの両方へ反映されます。対象条件は縦方向と同じです。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
+Like the vertical behavior, it is delivered globally and affects both direct scrolling and inertial scrolling on eligible sensors. With `vertical-scroll-uses-x-axis`, X is vertical and Y is horizontal. Without it, Y is vertical and X is horizontal.
 
-## 制御Behaviorの初期状態
+## Initial control behavior state
 
-設定が保存されていない初回起動時の状態は以下です。
+The initial state when no saved settings exist is:
 
-| 制御 | 初期状態 |
+| Control | Initial state |
 |---|---|
-| 慣性スクロール | ON |
-| 縦スクロール方向の反転 | OFF |
-| 横スクロール方向の反転 | OFF |
+| Inertial scrolling | ON |
+| Vertical direction inversion | OFF |
+| Horizontal direction inversion | OFF |
 
-`CONFIG_SETTINGS=y` で保存済みの状態がある場合は、その値を起動時に復元します。
+When `CONFIG_SETTINGS=y` and a saved state exists, the driver restores that state during startup.
 
-## 片側センサー構成
+## Single-sided sensor configurations
 
-PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。Behavior制御部は `CONFIG_PMW3610` とは独立してビルドされるため、センサーがCentralだけ、Peripheralだけ、または両側にある構成を利用できます。センサーのない側は状態同期だけを担当し、搭載側のセンサーへ設定を適用します。
+The module supports zero, one, or multiple PMW3610 devices. Control behavior code is built independently of `CONFIG_PMW3610`, allowing sensors on only the Central, only a Peripheral, or both halves. A half without a sensor participates only in state synchronization.
 
-Split PeripheralはCentralのキーマップレイヤーを直接参照できないため、アクティブレイヤーを制御Behavior経由で同期します。これによりPeripheral側だけにセンサーがある場合も `inertial-scroll-layers` が機能します。起動時とレイヤー・トグル変更時に同期し、失敗時は有限回再試行します。常時5秒ポーリングは行わないため、再試行終了後に再接続した場合は、次のレイヤー変更またはトグル操作で再同期されます。
+A split Peripheral cannot read the Central keymap layer directly, so active layers are synchronized through the control behavior. This allows `inertial-scroll-layers` to work for a sensor located only on a Peripheral. Synchronization happens at startup and after layer or toggle changes, with a finite retry count. There is no permanent five-second polling loop; after retries are exhausted, a later reconnection is synchronized on the next layer change or toggle action.
 
-このレイヤー同期は `pmw3610_inertia_toggle` Behaviorを同期経路として使用します。Split Peripheral上のセンサーで `inertial-scroll-layers` を使う場合は、`pmw3610_inertia_toggle.dtsi` をincludeし、キーマップから `&pmw3610_inertia_toggle` を参照してBehavior nodeが有効になるようにしてください。各dtsiのBehavior nodeには `/omit-if-no-ref/` が指定されているため、includeするだけで参照がない場合はビルド時に除去されます。
+Layer synchronization uses the `pmw3610_inertia_toggle` behavior as its transport path. When using `inertial-scroll-layers` on a split Peripheral sensor, include `pmw3610_inertia_toggle.dtsi` and reference `&pmw3610_inertia_toggle` from the keymap so the behavior node remains enabled. Each provided behavior node uses `/omit-if-no-ref/`, so an included but unreferenced node is removed during the build.
 
-### keymap-editor をお使いの場合
+### Using keymap-editor
 
-[nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) は外部 west モジュールのビヘイビアをUI経由で追加できません。ただし、既に `.keymap` に記載されているバインディングはそのまま保持されます。
+[nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) cannot add behaviors from an external west module through its UI. Existing bindings already present in the `.keymap` file are preserved.
 
-**ワークアラウンド**: configリポジトリ側の `.keymap` にBehavior nodeを定義するか、
-`&pmw3610_inertia_toggle` / `&pmw3610_scroll_direction_toggle` /
-`&pmw3610_horizontal_scroll_direction_toggle` を手書きで割り当ててください。
-外部westモジュールを直接解析しないEditorでも既存バインディングは保持されます。
+As a workaround, define the behavior node in the config repository's `.keymap` or manually assign:
+
+- `&pmw3610_inertia_toggle`
+- `&pmw3610_scroll_direction_toggle`
+- `&pmw3610_horizontal_scroll_direction_toggle`
+
+The editor preserves these existing bindings even though it does not parse the external west module directly.
