@@ -15,7 +15,7 @@ badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zm
 ### 安定性・電源管理の改善
 
 - **レベルトリガ割り込み**: エッジトリガではなくレベルトリガ (`GPIO_INT_LEVEL_ACTIVE`) を採用し、割り込み無効期間中のモーションイベント取りこぼしを防止。
-- **フェイルセーフ初期化**: SPI 初期化失敗時に最大3回リトライし、連続失敗時は 10 秒バックオフ後に初期化を最初からやり直す。電池切れや文鎮化を防止。
+- **フェイルセーフ初期化**: SPI 初期化失敗時に最大3回リトライし、連続失敗時はデフォルト1秒のバックオフ後に初期化を最初からやり直す。バックオフ時間は `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` で変更できる。
 - **FAULT リカバリ & ジャンプ防止**: FAULT 検知時に蓄積済みの移動量 (`dx`, `dy`) と慣性状態を破棄し、復帰後のカーソル暴走を防止。
 - **入力キュー保護**: X/Y の斜め移動を1つの同期レポートに保ち、X投入後は対応するYが入るまで待つことで、未完了イベントが後から混入することを防止。
 - **慣性状態の排他制御**: 慣性ワーク、トグル、FAULT復旧が同時に走っても、停止後に古い慣性ワークが状態を再生成しないよう保護。
@@ -93,6 +93,9 @@ manifest:
         /* ドリフトフィルタ: 0 で無効化 */
         motion-threshold = <1>;
 
+        /* 異常な単発移動量を破棄（任意、デフォルト 512） */
+        max-motion-delta = <512>;
+
         /* 慣性スクロール（任意） */
         inertial-scroll;
         inertial-scroll-layers = <6 7>;   /* 有効にするレイヤー番号。省略時は全レイヤーで有効 */
@@ -146,7 +149,8 @@ CONFIG_PMW3610=y
 | `evt-type` | int | (必須) | 入力イベント種別（`INPUT_EV_REL` など） |
 | `x-input-code` | int | (必須) | X 軸の入力コード |
 | `y-input-code` | int | (必須) | Y 軸の入力コード |
-| `motion-threshold` | int | 1 | ドリフトフィルタ閾値。絶対値がこの値以下の XY デルタを破棄。`0` で無効 |
+| `motion-threshold` | int | 1 | ドリフトフィルタ閾値。XとYの絶対値が両方ともこの値以下のサンプルを破棄。`0` で無効 |
+| `max-motion-delta` | int | 512 | XまたはYの絶対値がこの値以上の単発サンプルを破棄し、異常なカーソルジャンプや慣性生成を防ぐ（1〜2048） |
 | `swap-xy` | boolean | — | XY 軸を入れ替える |
 | `invert-x` | boolean | — | X 軸を反転する |
 | `invert-y` | boolean | — | Y 軸を反転する |
@@ -257,13 +261,25 @@ Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送�
 
 縦方向と同様にGlobal Behaviorとして配送され、対象センサーの通常スクロールと慣性スクロールの両方へ反映されます。対象条件は縦方向と同じです。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
 
+## 制御Behaviorの初期状態
+
+設定が保存されていない初回起動時の状態は以下です。
+
+| 制御 | 初期状態 |
+|---|---|
+| 慣性スクロール | ON |
+| 縦スクロール方向の反転 | OFF |
+| 横スクロール方向の反転 | OFF |
+
+`CONFIG_SETTINGS=y` で保存済みの状態がある場合は、その値を起動時に復元します。
+
 ## 片側センサー構成
 
 PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。Behavior制御部は `CONFIG_PMW3610` とは独立してビルドされるため、センサーがCentralだけ、Peripheralだけ、または両側にある構成を利用できます。センサーのない側は状態同期だけを担当し、搭載側のセンサーへ設定を適用します。
 
 Split PeripheralはCentralのキーマップレイヤーを直接参照できないため、アクティブレイヤーを制御Behavior経由で同期します。これによりPeripheral側だけにセンサーがある場合も `inertial-scroll-layers` が機能します。起動時とレイヤー・トグル変更時に同期し、失敗時は有限回再試行します。常時5秒ポーリングは行わないため、再試行終了後に再接続した場合は、次のレイヤー変更またはトグル操作で再同期されます。
 
-`CONFIG_SETTINGS=y` の構成では、慣性ON/OFF・縦方向・横方向の状態を保存し、再起動後に復元します。
+このレイヤー同期は `pmw3610_inertia_toggle` Behaviorを同期経路として使用します。Split Peripheral上のセンサーで `inertial-scroll-layers` を使う場合は、`pmw3610_inertia_toggle.dtsi` をincludeし、キーマップから `&pmw3610_inertia_toggle` を参照してBehavior nodeが有効になるようにしてください。各dtsiのBehavior nodeには `/omit-if-no-ref/` が指定されているため、includeするだけで参照がない場合はビルド時に除去されます。
 
 ### keymap-editor をお使いの場合
 
