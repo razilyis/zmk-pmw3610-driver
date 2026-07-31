@@ -71,11 +71,11 @@ config PMW3610_ALT_WORKQUEUE_STACK_SIZE
 
 config PMW3610_ALT_WORKQUEUE_PRIORITY
   int "PMW3610 work queue priority"
-  default 1
+  default 10
   range 0 14
   help
-    Preemptible priority for PMW3610 processing. The default keeps the system
-    work queue and ZMK input thread responsive during sensor activity.
+    Preemptible priority for PMW3610 processing. A lower-priority producer
+    prevents sensor retries from starving ZMK's input consumer.
 
 config PMW3610_ALT_INPUT_REPORT_TIMEOUT_MS
   int "Maximum PMW3610 input queue wait (ms)"

@@ -538,6 +538,9 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
     const struct pixart_config *config = dev->config;
     bool have_x = x != 0;
     bool have_y = y != 0;
+    bool x_sync =
+        !have_y || (IS_ENABLED(CONFIG_ZMK_SPLIT) &&
+                    !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL));
     k_timeout_t timeout = K_MSEC(CONFIG_PMW3610_ALT_INPUT_REPORT_TIMEOUT_MS);
     int first_err = 0;
 
@@ -569,7 +572,7 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
 
     if (have_x) {
         int err =
-            input_report(dev, config->evt_type, config->x_input_code, x, !have_y, timeout);
+            input_report(dev, config->evt_type, config->x_input_code, x, x_sync, timeout);
         if (err) {
             first_err = err;
         } else {
@@ -582,7 +585,7 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
             if (!first_err) {
                 first_err = err;
             }
-            if (have_x && *x_sent) {
+            if (have_x && *x_sent && !x_sync) {
                 int flush_err =
                     input_report(dev, config->evt_type, config->x_input_code, 0, true, timeout);
                 if (flush_err) {
@@ -603,6 +606,13 @@ static void pmw3610_limit_pending_motion(struct pixart_data *data,
 
     data->dx = CLAMP(data->dx, -limit, limit);
     data->dy = CLAMP(data->dy, -limit, limit);
+}
+
+static int16_t pmw3610_bounded_report_delta(
+    int64_t value, const struct pixart_config *config) {
+    int64_t limit = config->max_report_delta;
+
+    return (int16_t)CLAMP(value, -limit, limit);
 }
 
 static int pmw3610_retry_pending_input(const struct device *dev) {
@@ -626,8 +636,8 @@ static int pmw3610_retry_pending_input(const struct device *dev) {
         return flush_err ? -EAGAIN : 0;
     }
 
-    int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
-    int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
+    int16_t rx = pmw3610_bounded_report_delta(data->dx, config);
+    int16_t ry = pmw3610_bounded_report_delta(data->dy, config);
     bool x_sent;
     bool y_sent;
     int err = pmw3610_emit_input(dev, rx, ry, &x_sent, &y_sent);
@@ -786,8 +796,8 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
 
     // fetch report value
-    int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
-    int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
+    int16_t rx = pmw3610_bounded_report_delta(data->dx, config);
+    int16_t ry = pmw3610_bounded_report_delta(data->dy, config);
     bool have_x = rx != 0;
     bool have_y = ry != 0;
 
@@ -796,10 +806,10 @@ static int pmw3610_report_data(const struct device *dev) {
         bool y_sent;
         err = pmw3610_emit_input(dev, rx, ry, &x_sent, &y_sent);
         if (x_sent) {
-            data->dx -= rx;
+            data->dx = 0;
         }
         if (y_sent) {
-            data->dy -= ry;
+            data->dy = 0;
         }
         pmw3610_limit_pending_motion(data, config);
         data->input_retry_pending =
@@ -1060,12 +1070,16 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_motion_delta) > 0 &&                                  \
                      DT_PROP(DT_DRV_INST(n), max_motion_delta) <= 2047,                            \
                  "PMW3610 max-motion-delta must be 1..2047");                                     \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_report_delta) > 0 &&                                  \
+                     DT_PROP(DT_DRV_INST(n), max_report_delta) <= 2047,                            \
+                 "PMW3610 max-report-delta must be 1..2047");                                     \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
         .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \
         .max_motion_delta = DT_PROP(DT_DRV_INST(n), max_motion_delta),                             \
+        .max_report_delta = DT_PROP(DT_DRV_INST(n), max_report_delta),                             \
         .swap_xy = DT_PROP(DT_DRV_INST(n), swap_xy),                                               \
         .inv_x = DT_PROP(DT_DRV_INST(n), invert_x),                                                \
         .inv_y = DT_PROP(DT_DRV_INST(n), invert_y),                                                \
