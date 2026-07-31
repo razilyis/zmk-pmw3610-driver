@@ -722,7 +722,13 @@ static int pmw3610_write_reg(const struct device *dev, uint8_t addr,
       .buffers = &tx_buf,
       .count = 1,
   };
-  return spi_write_dt(&cfg->spi, &tx);
+  int err = spi_write_dt(&cfg->spi, &tx);
+
+  if (!err) {
+    /* PMW3610 requires tSWW before the next SPI command. */
+    k_busy_wait(T_SWW_DELAY_US);
+  }
+  return err;
 }
 
 static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
@@ -1258,6 +1264,9 @@ static int pmw3610_report_data(const struct device *dev) {
   if (abs(x) >= config->max_motion_delta ||
       abs(y) >= config->max_motion_delta) {
     LOG_WRN("Extreme motion delta detected (x:%d, y:%d), filtering", x, y);
+    /* Do not let motion accumulated before a corrupt sample escape later. */
+    data->dx = 0;
+    data->dy = 0;
     pmw3610_stop_inertia(data);
     pmw3610_reset_gesture_velocity(data);
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
@@ -1269,12 +1278,31 @@ static int pmw3610_report_data(const struct device *dev) {
       abs(x) <= config->motion_threshold && abs(y) <= config->motion_threshold) {
     LOG_DBG("Drift-sized motion delta filtered (x:%d, y:%d)", x, y);
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    data->last_smp_time = now;
+    if (data->dx != 0 || data->dy != 0) {
+      if (now - data->last_smp_time >= CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
+        data->dx = 0;
+        data->dy = 0;
+      } else if (now - data->last_rpt_time >=
+                 CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
+        goto emit_pending_motion;
+      }
+    }
 #endif
     return 0;
   }
   pmw3610_apply_low_speed_stabilizer(dev, &x, &y);
   if (x == 0 && y == 0) {
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+    if (data->dx != 0 || data->dy != 0) {
+      if (now - data->last_smp_time >= CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
+        data->dx = 0;
+        data->dy = 0;
+      } else if (now - data->last_rpt_time >=
+                 CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
+        goto emit_pending_motion;
+      }
+    }
+#endif
     return 0;
   }
   LOG_DBG("x/y: %d/%d", x, y);
@@ -1322,6 +1350,9 @@ static int pmw3610_report_data(const struct device *dev) {
   }
 #endif
 
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+emit_pending_motion:
+#endif
   // fetch report value
   int16_t rx = pmw3610_bounded_report_delta(data->dx, config);
   int16_t ry = pmw3610_bounded_report_delta(data->dy, config);
@@ -1805,7 +1836,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
   PMW3610_DECLARE_INERTIAL_LAYERS(n)                                           \
   static struct pixart_data data##n;                                           \
   static const struct pixart_config config##n = {                              \
-      .spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),                     \
+      .spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, T_CS_HOLD_DELAY_US),    \
       .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                         \
       .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                     \
       .motion_threshold = DT_PROP(DT_DRV_INST(n), motion_threshold),           \
