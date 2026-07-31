@@ -90,6 +90,9 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
         evt-type = <INPUT_EV_REL>;
         x-input-code = <INPUT_REL_X>;
         y-input-code = <INPUT_REL_Y>;
+        motion-threshold = <1>;
+        /* Ignore drift-sized samples when both axes are at or below this value.
+           Set to 0 to disable this filter. */
         max-motion-delta = <512>;
         max-report-delta = <2047>;
 

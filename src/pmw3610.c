@@ -78,28 +78,48 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 //////// Function definitions //////////
 
 static int pmw3610_set_interrupt(const struct device *dev, const bool en);
-
-static int pmw3610_read_unlocked(const struct device *dev, uint8_t addr, uint8_t *value,
-                                 uint8_t len) {
-	const struct pixart_config *cfg = dev->config;
-	const struct spi_buf tx_buf = { .buf = &addr, .len = sizeof(addr) };
-	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
-	struct spi_buf rx_buf[] = {
-		{ .buf = NULL, .len = sizeof(addr), },
-		{ .buf = value, .len = len, },
-	};
-	const struct spi_buf_set rx = { .buffers = rx_buf, .count = ARRAY_SIZE(rx_buf) };
-	return spi_transceive_dt(&cfg->spi, &tx, &rx);
-}
+static int pmw3610_write_reg(const struct device *dev, uint8_t addr, uint8_t value);
 
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, uint8_t len) {
+    const struct pixart_config *cfg = dev->config;
     struct pixart_data *data = dev->data;
-    int err;
+    struct spi_config read_config = cfg->spi.config;
+    const struct spi_buf tx_buf = {.buf = &addr, .len = sizeof(addr)};
+    const struct spi_buf_set tx = {.buffers = &tx_buf, .count = 1};
+    struct spi_buf rx_buf = {.buf = value, .len = len};
+    const struct spi_buf_set rx = {.buffers = &rx_buf, .count = 1};
+
+    /* Hold CS across address, tSRAD, and data phases as required by PMW3610. */
+    read_config.operation |= SPI_HOLD_ON_CS | SPI_LOCK_ON;
 
     k_mutex_lock(&data->spi_mutex, K_FOREVER);
-    err = pmw3610_read_unlocked(dev, addr, value, len);
+
+    int err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                                PMW3610_SPI_CLOCK_CMD_ENABLE);
+    if (err) {
+        k_mutex_unlock(&data->spi_mutex);
+        return err;
+    }
+    k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+
+    err = spi_write(cfg->spi.bus, &read_config, &tx);
+    if (!err) {
+        k_busy_wait(T_SRAD_DELAY_US);
+        err = spi_read(cfg->spi.bus, &read_config, &rx);
+    }
+
+    int release_err = spi_release(cfg->spi.bus, &read_config);
+    int disable_err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                                        PMW3610_SPI_CLOCK_CMD_DISABLE);
     k_mutex_unlock(&data->spi_mutex);
-    return err;
+
+    if (err) {
+        return err;
+    }
+    if (release_err) {
+        return release_err;
+    }
+    return disable_err;
 }
 
 static int pmw3610_read_reg(const struct device *dev, uint8_t addr, uint8_t *value) {
@@ -111,7 +131,12 @@ static int pmw3610_write_reg(const struct device *dev, uint8_t addr, uint8_t val
 	uint8_t write_buf[] = {addr | SPI_WRITE_BIT, value};
 	const struct spi_buf tx_buf = { .buf = write_buf, .len = sizeof(write_buf), };
 	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1, };
-	return spi_write_dt(&cfg->spi, &tx);
+	int err = spi_write_dt(&cfg->spi, &tx);
+
+	if (!err) {
+		k_busy_wait(T_SWW_DELAY_US);
+	}
+	return err;
 }
 
 static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
@@ -746,8 +771,27 @@ static int pmw3610_report_data(const struct device *dev) {
     if (x >= config->max_motion_delta || x <= -(int32_t)config->max_motion_delta ||
         y >= config->max_motion_delta || y <= -(int32_t)config->max_motion_delta) {
         LOG_WRN("Extreme motion delta filtered (x:%d, y:%d)", x, y);
+        data->dx = 0;
+        data->dy = 0;
 #if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
         data->last_smp_time = now;
+#endif
+        return 0;
+    }
+    if (config->motion_threshold > 0 &&
+        x <= config->motion_threshold && x >= -(int32_t)config->motion_threshold &&
+        y <= config->motion_threshold && y >= -(int32_t)config->motion_threshold) {
+        LOG_DBG("Drift-sized motion delta filtered (x:%d, y:%d)", x, y);
+#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
+        if (data->dx != 0 || data->dy != 0) {
+            if (now - data->last_smp_time >= CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
+                data->dx = 0;
+                data->dy = 0;
+            } else if (now - data->last_rpt_time >=
+                       CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
+                goto emit_pending_motion;
+            }
+        }
 #endif
         return 0;
     }
@@ -795,6 +839,9 @@ static int pmw3610_report_data(const struct device *dev) {
     }
 #endif
 
+#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
+emit_pending_motion:
+#endif
     // fetch report value
     int16_t rx = pmw3610_bounded_report_delta(data->dx, config);
     int16_t ry = pmw3610_bounded_report_delta(data->dy, config);
@@ -1067,6 +1114,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                      DT_PROP(DT_DRV_INST(n), cpi) <= PMW3610_MAX_CPI &&                            \
                      DT_PROP(DT_DRV_INST(n), cpi) % 200 == 0,                                      \
                  "PMW3610 cpi must be 200..3200 in steps of 200");                                 \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), motion_threshold) <= 1024,                                \
+                 "PMW3610 motion-threshold must be 0..1024");                                    \
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_motion_delta) > 0 &&                                  \
                      DT_PROP(DT_DRV_INST(n), max_motion_delta) <= 2047,                            \
                  "PMW3610 max-motion-delta must be 1..2047");                                     \
@@ -1075,9 +1124,10 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                  "PMW3610 max-report-delta must be 1..2047");                                     \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
-		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
+        .spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, T_CS_HOLD_DELAY_US),                       \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
         .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \
+        .motion_threshold = DT_PROP(DT_DRV_INST(n), motion_threshold),                             \
         .max_motion_delta = DT_PROP(DT_DRV_INST(n), max_motion_delta),                             \
         .max_report_delta = DT_PROP(DT_DRV_INST(n), max_report_delta),                             \
         .swap_xy = DT_PROP(DT_DRV_INST(n), swap_xy),                                               \

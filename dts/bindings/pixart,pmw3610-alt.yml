@@ -13,6 +13,12 @@ properties:
     type: int
     default: 600
     description: "CPI value (Range: 200 - 3200, Step: 200)"
+  motion-threshold:
+    type: int
+    default: 1
+    description: |
+      Ignore X/Y motion deltas whose absolute values are both at or below this
+      threshold. Set to 0 to disable drift filtering.
   max-motion-delta:
     type: int
     default: 512

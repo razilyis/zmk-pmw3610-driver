@@ -2,6 +2,17 @@
 
 ## 2026-07-31
 
+### Harden SPI timing, drift filtering, and pending motion
+
+- Added a CS hold delay and the PMW3610-required delay between write commands.
+- Reworked reads to hold CS across the address/data phases and wait for tSRAD.
+- Added `motion-threshold` support to the ALT binding and driver.
+- Dropped previously accumulated motion when a corrupt sample is detected.
+- Filtered micro-motion now flushes only fresh pending motion and drops stale data.
+- This affects PMW3610 SPI and input handling on both central and peripheral
+  builds. CPI, layers, transforms, BLE limits, stacks, and ACL buffers are
+  unchanged.
+
 ### Bound accumulated motion and isolate split-axis frames
 
 - Added `max-report-delta` to bound one emitted report after interval-based

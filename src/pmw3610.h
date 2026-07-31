@@ -9,6 +9,9 @@ extern "C" {
 
 /* Timings (in us) used in SPI communication. */
 #define T_CLOCK_ON_DELAY_US 300
+#define T_SRAD_DELAY_US     35
+#define T_SWW_DELAY_US      30
+#define T_CS_HOLD_DELAY_US  10
 
 /* Sensor registers (addresses) */
 #define PMW3610_REG_PRODUCT_ID 0x00
