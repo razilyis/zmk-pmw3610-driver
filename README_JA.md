@@ -98,6 +98,9 @@ manifest:
         /* 異常な単発移動量を破棄（任意、デフォルト 512） */
         max-motion-delta = <512>;
 
+        /* 蓄積後の1レポートを制限（任意、デフォルト 2047） */
+        max-report-delta = <2047>;
+
         /* 慣性スクロール（任意） */
         inertial-scroll;
         inertial-scroll-layers = <6 7>;   /* 有効にするレイヤー番号。省略時は全レイヤーで有効 */
@@ -153,6 +156,7 @@ CONFIG_PMW3610=y
 | `y-input-code` | int | (必須) | Y 軸の入力コード |
 | `motion-threshold` | int | 1 | ドリフトフィルタ閾値。XとYの絶対値が両方ともこの値以下のサンプルを破棄。`0` で無効 |
 | `max-motion-delta` | int | 512 | XまたはYの絶対値がこの値以上の単発サンプルを破棄し、異常なカーソルジャンプや慣性生成を防ぐ（1〜2048） |
+| `max-report-delta` | int | 2047 | 蓄積後に1レポートで送る絶対値を制限し、超過分を後続レポートとして放出せず破棄する（1〜2047） |
 | `swap-xy` | boolean | — | XY 軸を入れ替える |
 | `invert-x` | boolean | — | X 軸を反転する |
 | `invert-y` | boolean | — | Y 軸を反転する |

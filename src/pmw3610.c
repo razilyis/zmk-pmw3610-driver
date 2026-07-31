@@ -378,6 +378,14 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
   const struct pixart_config *config = dev->config;
   bool have_x = x != 0;
   bool have_y = y != 0;
+  /*
+   * A split peripheral forwards each axis in a separate BLE notification.
+   * Synchronize both independently so losing one notification cannot leave
+   * stale unsynchronized motion on the central half.
+   */
+  bool x_sync =
+      !have_y || (IS_ENABLED(CONFIG_ZMK_SPLIT) &&
+                  !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL));
   k_timeout_t timeout = K_MSEC(CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS);
   int first_err = 0;
 
@@ -410,7 +418,7 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
 
   if (have_x) {
     int err = input_report(dev, config->evt_type, config->x_input_code, x,
-                           !have_y, timeout);
+                           x_sync, timeout);
     if (err) {
       first_err = err;
     } else {
@@ -424,7 +432,7 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
       if (!first_err) {
         first_err = err;
       }
-      if (have_x && *x_sent) {
+      if (have_x && *x_sent && !x_sync) {
         /*
          * X was queued without sync. Close that partial frame with a neutral
          * event. Remember a failed close so later reports cannot append X.
@@ -444,6 +452,13 @@ static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
   }
 
   return first_err;
+}
+
+static int16_t pmw3610_bounded_report_delta(
+    int64_t value, const struct pixart_config *config) {
+  int64_t limit = config->max_report_delta;
+
+  return (int16_t)CLAMP(value, -limit, limit);
 }
 
 static void pmw3610_set_input_retry(struct pixart_data *data,
@@ -1308,8 +1323,8 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
 
   // fetch report value
-  int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
-  int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
+  int16_t rx = pmw3610_bounded_report_delta(data->dx, config);
+  int16_t ry = pmw3610_bounded_report_delta(data->dy, config);
   if (pmw3610_vertical_scroll_direction_is_inverted(dev)) {
     if (config->vertical_scroll_uses_x_axis) {
       rx = rx == INT16_MIN ? INT16_MAX : -rx;
@@ -1740,6 +1755,9 @@ static const struct sensor_driver_api pmw3610_driver_api = {
   BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_motion_delta) > 0 &&                 \
                    DT_PROP(DT_DRV_INST(n), max_motion_delta) <= 2048,           \
                "PMW3610 max-motion-delta must be 1..2048");                    \
+  BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_report_delta) > 0 &&                 \
+                   DT_PROP(DT_DRV_INST(n), max_report_delta) <= 2047,           \
+               "PMW3610 max-report-delta must be 1..2047");                    \
   BUILD_ASSERT(                                                                \
       !DT_PROP(DT_DRV_INST(n), low_speed_stabilizer) ||                        \
           (DT_PROP(DT_DRV_INST(n), low_speed_stabilizer_threshold) > 0 &&      \
@@ -1792,6 +1810,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
       .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                     \
       .motion_threshold = DT_PROP(DT_DRV_INST(n), motion_threshold),           \
       .max_motion_delta = DT_PROP(DT_DRV_INST(n), max_motion_delta),           \
+      .max_report_delta = DT_PROP(DT_DRV_INST(n), max_report_delta),           \
       .low_speed_stabilizer =                                                  \
           DT_PROP(DT_DRV_INST(n), low_speed_stabilizer),                       \
       .low_speed_stabilizer_threshold =                                        \

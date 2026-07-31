@@ -83,6 +83,7 @@ struct pixart_config {
   uint16_t cpi;
   uint16_t motion_threshold;
   uint16_t max_motion_delta;
+  uint16_t max_report_delta;
   bool low_speed_stabilizer;
   uint16_t low_speed_stabilizer_threshold;
   uint16_t low_speed_stabilizer_timeout_ms;

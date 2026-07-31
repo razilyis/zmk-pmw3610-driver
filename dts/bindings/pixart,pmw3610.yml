@@ -26,6 +26,13 @@ properties:
       Reject a single motion sample when either axis reaches this absolute
       value. This prevents corrupted-but-successful SPI samples from producing
       a pointer jump or seeding inertial scrolling.
+  max-report-delta:
+    type: int
+    default: 2047
+    description: |
+      Maximum absolute X/Y delta emitted in one input report after samples
+      have been accumulated. Excess motion is discarded instead of being
+      released in later reports as a delayed cursor or scroll jump.
   low-speed-stabilizer:
     type: boolean
     description: |

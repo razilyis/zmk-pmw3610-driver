@@ -98,6 +98,9 @@ Add the sensor configuration to `<board>.overlay`. Change the pin assignments to
         /* Reject abnormal single-sample movement. Optional; default 512. */
         max-motion-delta = <512>;
 
+        /* Bound one accumulated report. Optional; default 2047. */
+        max-report-delta = <2047>;
+
         /* Inertial scrolling (optional). */
         inertial-scroll;
         inertial-scroll-layers = <6 7>; /* Enabled layers. Omit to enable on all layers. */
@@ -153,6 +156,7 @@ CONFIG_PMW3610=y
 | `y-input-code` | int | required | Y-axis input code |
 | `motion-threshold` | int | 1 | Discard a sample when the absolute values of both X and Y are at or below this drift-filter threshold. Set to `0` to disable |
 | `max-motion-delta` | int | 512 | Discard a single sample when the absolute value of X or Y is at or above this value, preventing abnormal pointer jumps and inertia generation. Valid range: 1 to 2048 |
+| `max-report-delta` | int | 2047 | Limit the accumulated delta emitted in one report and discard excess motion instead of releasing it as a delayed cursor or scroll jump. Valid range: 1 to 2047 |
 | `swap-xy` | boolean | — | Swap the X and Y axes |
 | `invert-x` | boolean | — | Invert the X axis |
 | `invert-y` | boolean | — | Invert the Y axis |
