@@ -296,3 +296,19 @@
 - **影響範囲**:
   - `low-speed-stabilizer`を指定したPMW3610の通常カーソルのみ。
   - 慣性スクロール、通常スクロール、BLE、CPIには変更なし。
+
+### 実施内容 (v18: 稀なカーソル暴走経路の遮断)
+
+- **目的**: input queue輻輳時に未完のX/Yフレームが残り、後続の相対移動へ合算されることで発生し得るカーソルジャンプを防止。
+- **変更内容**:
+  - PMW3610のmotion、init、慣性、activity処理を専用workqueueへ移動。
+  - X送信後にYとneutral syncが失敗した状態を記録し、新しいXを送る前に未完フレームを閉じる処理を追加。
+  - 未送信移動量を`max-motion-delta`以内に制限し、50msを超えた場合は破棄。
+  - input送信を既定でノンブロッキング化し、1ms間隔の短時間リトライへ変更。
+  - MOTなしのactive IRQを1ms間隔で再確認し、20ms継続した場合だけ再初期化。
+  - activityによるperformance変更も専用workqueueへ転送し、センサー状態変更を直列化。
+- **確認**:
+  - AroundFortyAAA左右のZephyr SDK 0.16.5ビルドに成功。
+- **影響範囲**:
+  - PMW3610ドライバ内部。慣性スクロール、方向トグル、CPI、レイヤー設定は変更なし。
+  - 専用workqueueのためRAMを約1.8KB追加使用。BLE接続数とsplit設定は変更なし。

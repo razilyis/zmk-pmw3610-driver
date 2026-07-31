@@ -11,6 +11,7 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -30,8 +31,9 @@ struct pixart_data {
 #endif
 
   struct gpio_callback irq_gpio_cb; // motion pin irq callback
-  struct k_work trigger_work;       // realtrigger job
+  struct k_work_delayable trigger_work; // motion, IRQ recheck, and input retry
   struct k_work_delayable inertia_work; // delayed inertial scroll job
+  struct k_work activity_work;      // serialized performance state update
   struct k_mutex spi_mutex;         // serialize multi-transfer sensor commands
   struct k_mutex inertia_mutex;     // serialize inertial state and cancellation
 
@@ -41,6 +43,11 @@ struct pixart_data {
   uint8_t init_retries; // counter for async init retries
   uint8_t report_error_count;
   uint8_t no_motion_irq_count;
+  int64_t no_motion_irq_since_ms;
+  int64_t input_retry_since_ms;
+  int16_t input_retry_x;
+  int16_t input_retry_y;
+  atomic_t performance_requested;
   uint32_t inertia_generation;
   int32_t inertia_vx_q8;
   int32_t inertia_vy_q8;
@@ -61,6 +68,9 @@ struct pixart_data {
   bool vertical_scroll_inverted;
   bool horizontal_scroll_inverted;
   bool performance_mode_enabled;
+  bool input_retry_pending;
+  bool input_frame_open;
+  bool irq_recheck_pending;
 
   bool ready; // whether init is finished successfully
   int err;    // error code during async init

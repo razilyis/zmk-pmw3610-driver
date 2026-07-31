@@ -44,14 +44,48 @@ config PMW3610_INIT_RETRY_BACKOFF_MS
     three retries have been exhausted. The retry runs asynchronously, so
     keyboard input remains available while the sensor recovers.
 
+config PMW3610_RECOVERY_DELAY_MS
+  int "Delay before runtime PMW3610 recovery (ms)"
+  default 20
+  range 10 500
+  help
+    Delay before restarting the sensor after a runtime SPI, FAULT, or IRQ
+    failure. This is intentionally shorter than the startup retry backoff.
+
+config PMW3610_STUCK_IRQ_TIME_MS
+  int "Time before treating an active IRQ without MOT as stuck (ms)"
+  default 20
+  range 5 500
+
+config PMW3610_INPUT_RETRY_TIMEOUT_MS
+  int "Maximum time to retain undelivered motion (ms)"
+  default 50
+  range 5 500
+  help
+    Drop undelivered motion after this period so input congestion cannot
+    produce a large delayed pointer jump.
+
+config PMW3610_WORKQUEUE_STACK_SIZE
+  int "PMW3610 work queue stack size"
+  default 1536
+  range 1024 4096
+
+config PMW3610_WORKQUEUE_PRIORITY
+  int "PMW3610 work queue priority"
+  default 10
+  range 0 14
+  help
+    Preemptible priority for PMW3610 processing. Keeping this below the input
+    consumer prevents the sensor producer from starving a congested queue.
+
 config PMW3610_INPUT_REPORT_TIMEOUT_MS
   int "Maximum PMW3610 input queue wait (ms)"
-  default 5
-  range 1 20
+  default 0
+  range 0 20
   help
     Maximum time the driver waits for each input event to enter Zephyr's input
-    queue. A finite timeout prevents a stalled input consumer from blocking the
-    system work queue indefinitely.
+    queue. Zero uses non-blocking delivery. Failed reports are retried for a
+    short bounded period on the dedicated PMW3610 work queue.
 
 config PMW3610_REPORT_INTERVAL_MIN
 	int "PMW3610's default minimum report rate"

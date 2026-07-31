@@ -207,8 +207,13 @@ Repeated small movements in the same direction are emitted without losing distan
 
 | Option | Default | Description |
 |---|---|---|
-| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 5 | Maximum time to wait for each event to enter the input queue, from 1 to 20 ms. Prevents a stalled input consumer from blocking the system work queue |
+| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 0 | Maximum time to wait for each event to enter the input queue, from 0 to 20 ms. Zero uses non-blocking delivery |
+| `CONFIG_PMW3610_INPUT_RETRY_TIMEOUT_MS` | 50 | Maximum time to retain an undelivered motion frame before dropping it |
 | `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` | 1000 | Delay before restarting full initialization after three failed retries, from 100 to 10000 ms |
+| `CONFIG_PMW3610_RECOVERY_DELAY_MS` | 20 | Short delay before runtime recovery after SPI, FAULT, or IRQ errors |
+| `CONFIG_PMW3610_STUCK_IRQ_TIME_MS` | 20 | Minimum continuous active-without-MOT time before treating the IRQ as stuck |
+| `CONFIG_PMW3610_WORKQUEUE_STACK_SIZE` | 1536 | Stack reserved for the dedicated PMW3610 work queue |
+| `CONFIG_PMW3610_WORKQUEUE_PRIORITY` | 10 | Preemptible priority of the dedicated PMW3610 work queue |
 
 ---
 

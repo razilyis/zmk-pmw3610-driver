@@ -205,8 +205,13 @@ inertial-scroll-layers = <6 7>;
 
 | 設定 | デフォルト | 説明 |
 |---|---|---|
-| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 5 | 入力キューへ1イベントを追加するときの最大待機時間（1〜20ms）。入力処理異常時のworkqueue停止を防ぐ |
+| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 0 | 入力キューへ1イベントを追加するときの最大待機時間（0〜20ms）。0はノンブロッキング送信 |
+| `CONFIG_PMW3610_INPUT_RETRY_TIMEOUT_MS` | 50 | 未送信フレームを保持して再試行する最大時間。超過後は移動量を破棄する |
 | `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` | 1000 | 初期化を3回再試行しても失敗した場合、初期化全体をやり直すまでの待機時間（100〜10000ms） |
+| `CONFIG_PMW3610_RECOVERY_DELAY_MS` | 20 | SPI・FAULT・IRQ異常後にランタイム復旧を始めるまでの短い待機時間 |
+| `CONFIG_PMW3610_STUCK_IRQ_TIME_MS` | 20 | MOTなしでIRQ activeが継続した場合に固着と判定するまでの最短時間 |
+| `CONFIG_PMW3610_WORKQUEUE_STACK_SIZE` | 1536 | PMW3610専用workqueue用に確保するスタックサイズ |
+| `CONFIG_PMW3610_WORKQUEUE_PRIORITY` | 10 | PMW3610専用workqueueのプリエンプティブ優先度 |
 
 ---
 
