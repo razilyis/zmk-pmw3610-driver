@@ -83,9 +83,18 @@ extern "C" {
 #define PMW3610_SHUTTER_H_POS 5
 #define PMW3610_SHUTTER_L_POS 6
 
+/* Motion register bits */
+#define PMW3610_MOTION_MOT BIT(7)
+#define PMW3610_MOTION_FAULT BIT(6)
+
 /* cpi/resolution range */
 #define PMW3610_MAX_CPI 3200
 #define PMW3610_MIN_CPI 200
+
+#define PMW3610_INIT_STEP_RETRY_COUNT 3
+#define PMW3610_REPORT_ERROR_RECOVERY_COUNT 3
+#define PMW3610_NO_MOTION_IRQ_RECOVERY_COUNT 3
+#define PMW3610_IRQ_RECHECK_DELAY_MS 1
 
 /* write command bit position */
 #define SPI_WRITE_BIT BIT(7)

@@ -6,6 +6,7 @@
 
 #define DT_DRV_COMPAT pixart_pmw3610_alt
 
+#include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/input/input.h>
@@ -16,6 +17,24 @@
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(pmw3610, CONFIG_PMW3610_ALT_LOG_LEVEL);
+
+K_THREAD_STACK_DEFINE(pmw3610_work_q_stack, CONFIG_PMW3610_ALT_WORKQUEUE_STACK_SIZE);
+static struct k_work_q pmw3610_work_q;
+
+static int pmw3610_work_queue_init(void) {
+    static const struct k_work_queue_config queue_config = {
+        .name = "PMW3610 Work Queue",
+    };
+
+    k_work_queue_start(&pmw3610_work_q, pmw3610_work_q_stack,
+                       K_THREAD_STACK_SIZEOF(pmw3610_work_q_stack),
+                       CONFIG_PMW3610_ALT_WORKQUEUE_PRIORITY, &queue_config);
+    return 0;
+}
+
+SYS_INIT(pmw3610_work_queue_init, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+BUILD_ASSERT(CONFIG_INPUT_PMW3610_INIT_PRIORITY > CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
+             "PMW3610 device init must run after its work queue init");
 
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
@@ -58,7 +77,10 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 //////// Function definitions //////////
 
-static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, uint8_t len) {
+static int pmw3610_set_interrupt(const struct device *dev, const bool en);
+
+static int pmw3610_read_unlocked(const struct device *dev, uint8_t addr, uint8_t *value,
+                                 uint8_t len) {
 	const struct pixart_config *cfg = dev->config;
 	const struct spi_buf tx_buf = { .buf = &addr, .len = sizeof(addr) };
 	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
@@ -68,6 +90,16 @@ static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, 
 	};
 	const struct spi_buf_set rx = { .buffers = rx_buf, .count = ARRAY_SIZE(rx_buf) };
 	return spi_transceive_dt(&cfg->spi, &tx, &rx);
+}
+
+static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, uint8_t len) {
+    struct pixart_data *data = dev->data;
+    int err;
+
+    k_mutex_lock(&data->spi_mutex, K_FOREVER);
+    err = pmw3610_read_unlocked(dev, addr, value, len);
+    k_mutex_unlock(&data->spi_mutex);
+    return err;
 }
 
 static int pmw3610_read_reg(const struct device *dev, uint8_t addr, uint8_t *value) {
@@ -83,16 +115,24 @@ static int pmw3610_write_reg(const struct device *dev, uint8_t addr, uint8_t val
 }
 
 static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
-	pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
-	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+    struct pixart_data *data = dev->data;
+    int err;
+    int disable_err;
 
-    int err = pmw3610_write_reg(dev, reg, val);
-    if (unlikely(err != 0)) {
+    k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
+    if (err) {
+        k_mutex_unlock(&data->spi_mutex);
         return err;
     }
-    
-    pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
-    return 0;
+	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+
+    err = pmw3610_write_reg(dev, reg, val);
+    disable_err =
+        pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
+    k_mutex_unlock(&data->spi_mutex);
+
+    return err ? err : disable_err;
 }
 
 static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi, 
@@ -104,7 +144,7 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi,
      * :
      */
 
-    if ((cpi > PMW3610_MAX_CPI) || (cpi < PMW3610_MIN_CPI)) {
+    if ((cpi > PMW3610_MAX_CPI) || (cpi < PMW3610_MIN_CPI) || (cpi % 200 != 0)) {
         LOG_ERR("CPI value %u out of range", cpi);
         return -EINVAL;
     }
@@ -149,7 +189,14 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi,
     uint8_t addr[] = {0x7F, PMW3610_REG_RES_STEP, 0x7F};
     uint8_t data[] = {0xFF, value,                0x00};
 
-	pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
+    struct pixart_data *driver_data = dev->data;
+    k_mutex_lock(&driver_data->spi_mutex, K_FOREVER);
+	err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                            PMW3610_SPI_CLOCK_CMD_ENABLE);
+    if (err) {
+        k_mutex_unlock(&driver_data->spi_mutex);
+        return err;
+    }
 	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
 
     /* Write data */
@@ -160,7 +207,13 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi,
             break;
         }
     }
-    pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
+    int disable_err =
+        pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ,
+                          PMW3610_SPI_CLOCK_CMD_DISABLE);
+    if (!err) {
+        err = disable_err;
+    }
+    k_mutex_unlock(&driver_data->spi_mutex);
 
     if (err) {
         LOG_ERR("Failed to set CPI");
@@ -273,7 +326,7 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
             perf = 0x0d; // RUN RATE @ 4ms
         } else {
             // reset bit[3..0] to 0x0 (normal operation)
-            perf = value & 0x0F; // RUN RATE @ 8ms
+            perf = 0x00; // RUN RATE @ 8ms
         }
 
         if (enabled) {
@@ -304,7 +357,12 @@ static int pmw3610_set_interrupt(const struct device *dev, const bool en) {
 }
 
 static int pmw3610_async_init_power_up(const struct device *dev) {
-	int ret = pmw3610_write_reg(dev, PMW3610_REG_POWER_UP_RESET, PMW3610_POWERUP_CMD_RESET);
+    struct pixart_data *data = dev->data;
+    int ret;
+
+    k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	ret = pmw3610_write_reg(dev, PMW3610_REG_POWER_UP_RESET, PMW3610_POWERUP_CMD_RESET);
+    k_mutex_unlock(&data->spi_mutex);
     if (ret < 0) {
         return ret;
     }
@@ -399,6 +457,32 @@ static int pmw3610_async_init_configure(const struct device *dev) {
     return 0;
 }
 
+static void pmw3610_begin_recovery(struct pixart_data *data) {
+    if (!data->ready) {
+        return;
+    }
+
+    data->ready = false;
+    (void)pmw3610_set_interrupt(data->dev, false);
+    data->dx = 0;
+    data->dy = 0;
+#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
+    data->last_smp_time = 0;
+    data->last_rpt_time = 0;
+#endif
+    data->report_error_count = 0;
+    data->no_motion_irq_count = 0;
+    data->no_motion_irq_since_ms = 0;
+    data->input_retry_pending = false;
+    data->input_retry_since_ms = 0;
+    data->input_frame_open = false;
+    data->irq_recheck_pending = false;
+    data->init_retries = 0;
+    data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+    k_work_reschedule_for_queue(&pmw3610_work_q, &data->init_work,
+                                K_MSEC(CONFIG_PMW3610_ALT_RECOVERY_DELAY_MS));
+}
+
 static void pmw3610_async_init(struct k_work *work) {
     struct k_work_delayable *work2 = (struct k_work_delayable *)work;
     struct pixart_data *data = CONTAINER_OF(work2, struct pixart_data, init_work);
@@ -408,18 +492,162 @@ static void pmw3610_async_init(struct k_work *work) {
 
     data->err = async_init_fn[data->async_init_step](dev);
     if (data->err) {
-        LOG_ERR("PMW3610 initialization failed in step %d", data->async_init_step);
+        if (data->init_retries < PMW3610_INIT_STEP_RETRY_COUNT) {
+            data->init_retries++;
+            LOG_ERR("PMW3610 initialization failed in step %d, retrying (%d/%d)",
+                    data->async_init_step, data->init_retries,
+                    PMW3610_INIT_STEP_RETRY_COUNT);
+            k_work_reschedule_for_queue(&pmw3610_work_q, &data->init_work, K_MSEC(100));
+        } else {
+            LOG_ERR("PMW3610 initialization failed in step %d; restarting in %d ms",
+                    data->async_init_step, CONFIG_PMW3610_ALT_INIT_RETRY_BACKOFF_MS);
+            data->init_retries = 0;
+            data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+            k_work_reschedule_for_queue(
+                &pmw3610_work_q, &data->init_work,
+                K_MSEC(CONFIG_PMW3610_ALT_INIT_RETRY_BACKOFF_MS));
+        }
     } else {
+        data->init_retries = 0;
         data->async_init_step++;
 
         if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
             data->ready = true; // sensor is ready to work
             LOG_INF("PMW3610 initialized");
-            pmw3610_set_interrupt(dev, true);
+            data->err = pmw3610_set_interrupt(dev, true);
+            if (data->err) {
+                LOG_ERR("Failed to enable PMW3610 interrupt; restarting init");
+                data->ready = false;
+                data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+                k_work_reschedule_for_queue(&pmw3610_work_q, &data->init_work, K_MSEC(100));
+            } else {
+                k_work_reschedule_for_queue(&pmw3610_work_q, &data->performance_work,
+                                            K_NO_WAIT);
+            }
         } else {
-            k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
+            k_work_reschedule_for_queue(
+                &pmw3610_work_q, &data->init_work,
+                K_MSEC(async_init_delay[data->async_init_step]));
         }
     }
+}
+
+static int pmw3610_emit_input(const struct device *dev, int16_t x, int16_t y,
+                              bool *x_sent, bool *y_sent) {
+    struct pixart_data *data = dev->data;
+    const struct pixart_config *config = dev->config;
+    bool have_x = x != 0;
+    bool have_y = y != 0;
+    k_timeout_t timeout = K_MSEC(CONFIG_PMW3610_ALT_INPUT_REPORT_TIMEOUT_MS);
+    int first_err = 0;
+
+    *x_sent = false;
+    *y_sent = false;
+
+    /*
+     * An earlier X event may already be queued without sync. Close that frame
+     * before sending any newer X value so an axis cannot be duplicated. While
+     * this state is active, pmw3610_report_data() retries the saved matching Y
+     * value without reading a newer sensor sample.
+     */
+    if (data->input_frame_open) {
+        int err;
+        if (have_y) {
+            err = input_report(dev, config->evt_type, config->y_input_code, y, true, timeout);
+            if (!err) {
+                *y_sent = true;
+                data->input_frame_open = false;
+            }
+        } else {
+            err = input_report(dev, config->evt_type, config->x_input_code, 0, true, timeout);
+            if (!err) {
+                data->input_frame_open = false;
+            }
+        }
+        return err;
+    }
+
+    if (have_x) {
+        int err =
+            input_report(dev, config->evt_type, config->x_input_code, x, !have_y, timeout);
+        if (err) {
+            first_err = err;
+        } else {
+            *x_sent = true;
+        }
+    }
+    if (have_y) {
+        int err = input_report(dev, config->evt_type, config->y_input_code, y, true, timeout);
+        if (err) {
+            if (!first_err) {
+                first_err = err;
+            }
+            if (have_x && *x_sent) {
+                int flush_err =
+                    input_report(dev, config->evt_type, config->x_input_code, 0, true, timeout);
+                if (flush_err) {
+                    data->input_frame_open = true;
+                }
+            }
+        } else {
+            *y_sent = true;
+        }
+    }
+
+    return first_err;
+}
+
+static void pmw3610_limit_pending_motion(struct pixart_data *data,
+                                         const struct pixart_config *config) {
+    int64_t limit = config->max_motion_delta;
+
+    data->dx = CLAMP(data->dx, -limit, limit);
+    data->dy = CLAMP(data->dy, -limit, limit);
+}
+
+static int pmw3610_retry_pending_input(const struct device *dev) {
+    struct pixart_data *data = dev->data;
+    const struct pixart_config *config = dev->config;
+    int64_t retry_now = k_uptime_get();
+
+    if (retry_now - data->input_retry_since_ms >=
+        CONFIG_PMW3610_ALT_INPUT_RETRY_TIMEOUT_MS) {
+        LOG_WRN("Dropping stale PMW3610 motion after input congestion");
+        int flush_err = 0;
+        if (data->input_frame_open) {
+            flush_err =
+                input_report(dev, config->evt_type, config->x_input_code, 0, true, K_NO_WAIT);
+        }
+        data->dx = 0;
+        data->dy = 0;
+        data->input_frame_open = flush_err != 0;
+        data->input_retry_pending = data->input_frame_open;
+        data->input_retry_since_ms = data->input_frame_open ? retry_now : 0;
+        return flush_err ? -EAGAIN : 0;
+    }
+
+    int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
+    int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
+    bool x_sent;
+    bool y_sent;
+    int err = pmw3610_emit_input(dev, rx, ry, &x_sent, &y_sent);
+
+    if (x_sent) {
+        data->dx -= rx;
+    }
+    if (y_sent) {
+        data->dy -= ry;
+    }
+    pmw3610_limit_pending_motion(data, config);
+
+    data->input_retry_pending =
+        data->input_frame_open || data->dx != 0 || data->dy != 0;
+    if (!data->input_retry_pending) {
+        data->input_retry_since_ms = 0;
+        return 0;
+    }
+
+    return err ? err : -EAGAIN;
 }
 
 static int pmw3610_report_data(const struct device *dev) {
@@ -432,19 +660,70 @@ static int pmw3610_report_data(const struct device *dev) {
         return -EBUSY;
     }
 
-    static int64_t dx = 0;
-    static int64_t dy = 0;
+    if (data->input_retry_pending) {
+        int retry_err = pmw3610_retry_pending_input(dev);
+        if (retry_err || !data->irq_recheck_pending) {
+            return retry_err;
+        }
+    }
 
 #if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
-    static int64_t last_smp_time = 0;
-    static int64_t last_rpt_time = 0;
     int64_t now = k_uptime_get();
 #endif
 
 	int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
+        data->report_error_count++;
+        LOG_WRN("Motion read failed (%d/%d): %d", data->report_error_count,
+                PMW3610_REPORT_ERROR_RECOVERY_COUNT, err);
+        if (data->report_error_count >= PMW3610_REPORT_ERROR_RECOVERY_COUNT) {
+            LOG_ERR("Repeated motion read failures; restarting PMW3610");
+            pmw3610_begin_recovery(data);
+        }
         return err;
     }
+
+    if (unlikely(buf[0] & PMW3610_MOTION_FAULT)) {
+        LOG_ERR("PMW3610 fault detected; restarting sensor");
+        pmw3610_begin_recovery(data);
+        return -EIO;
+    }
+
+    if (!(buf[0] & PMW3610_MOTION_MOT)) {
+        int irq_active = gpio_pin_get_dt(&config->irq_gpio);
+        if (irq_active < 0) {
+            pmw3610_begin_recovery(data);
+            return irq_active;
+        }
+        if (irq_active) {
+            int64_t irq_now = k_uptime_get();
+            if (data->no_motion_irq_count < UINT8_MAX) {
+                data->no_motion_irq_count++;
+            }
+            if (!data->no_motion_irq_since_ms) {
+                data->no_motion_irq_since_ms = irq_now;
+            }
+            if (data->no_motion_irq_count >= PMW3610_NO_MOTION_IRQ_RECOVERY_COUNT &&
+                irq_now - data->no_motion_irq_since_ms >=
+                    CONFIG_PMW3610_ALT_STUCK_IRQ_TIME_MS) {
+                LOG_ERR("Stuck PMW3610 motion IRQ; restarting sensor");
+                pmw3610_begin_recovery(data);
+                return -EIO;
+            }
+            data->irq_recheck_pending = true;
+            return -EAGAIN;
+        } else {
+            data->no_motion_irq_count = 0;
+            data->no_motion_irq_since_ms = 0;
+            data->irq_recheck_pending = false;
+        }
+        data->report_error_count = 0;
+        return 0;
+    }
+    data->report_error_count = 0;
+    data->no_motion_irq_count = 0;
+    data->no_motion_irq_since_ms = 0;
+    data->irq_recheck_pending = false;
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
 // 12-bit two's complement value to int16_t
@@ -453,58 +732,93 @@ static int pmw3610_report_data(const struct device *dev) {
 
     int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
+
+    if (x >= config->max_motion_delta || x <= -(int32_t)config->max_motion_delta ||
+        y >= config->max_motion_delta || y <= -(int32_t)config->max_motion_delta) {
+        LOG_WRN("Extreme motion delta filtered (x:%d, y:%d)", x, y);
+#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
+        data->last_smp_time = now;
+#endif
+        return 0;
+    }
     LOG_DBG("x/y: %d/%d", x, y);
 
 #ifdef CONFIG_PMW3610_ALT_SMART_ALGORITHM
     int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8) 
                     + buf[PMW3610_SHUTTER_L_POS];
     if (data->sw_smart_flag && shutter < 45) {
-        pmw3610_write(dev, 0x32, 0x00);
-        data->sw_smart_flag = false;
+        err = pmw3610_write(dev, 0x32, 0x00);
+        if (!err) {
+            data->sw_smart_flag = false;
+        }
     }
-    if (!data->sw_smart_flag && shutter > 45) {
-        pmw3610_write(dev, 0x32, 0x80);
-        data->sw_smart_flag = true;
+    if (!err && !data->sw_smart_flag && shutter > 45) {
+        err = pmw3610_write(dev, 0x32, 0x80);
+        if (!err) {
+            data->sw_smart_flag = true;
+        }
+    }
+    if (err) {
+        pmw3610_begin_recovery(data);
+        return err;
     }
 #endif
 
 #if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
     // purge accumulated delta, if last sampled had not been reported on last report tick
-    if (now - last_smp_time >= CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
-        dx = 0;
-        dy = 0;
+    if (!data->input_retry_pending &&
+        now - data->last_smp_time >= CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
+        data->dx = 0;
+        data->dy = 0;
     }
-    last_smp_time = now;
+    data->last_smp_time = now;
 #endif
 
     // accumulate delta until report in next iteration
-    dx += x;
-    dy += y;
+    data->dx += x;
+    data->dy += y;
 
 #if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
     // strict to report inerval
-    if (now - last_rpt_time < CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
+    if (now - data->last_rpt_time < CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
         return 0;
     }
 #endif
 
     // fetch report value
-    int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
-    int16_t ry = (int16_t)CLAMP(dy, INT16_MIN, INT16_MAX);
+    int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
+    int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
     bool have_x = rx != 0;
     bool have_y = ry != 0;
 
     if (have_x || have_y) {
-#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
-        last_rpt_time = now;
-#endif
-        dx = 0;
-        dy = 0;
-        if (have_x) {
-            input_report(dev, config->evt_type, config->x_input_code, rx, !have_y, K_NO_WAIT);
+        bool x_sent;
+        bool y_sent;
+        err = pmw3610_emit_input(dev, rx, ry, &x_sent, &y_sent);
+        if (x_sent) {
+            data->dx -= rx;
         }
-        if (have_y) {
-            input_report(dev, config->evt_type, config->y_input_code, ry, true, K_NO_WAIT);
+        if (y_sent) {
+            data->dy -= ry;
+        }
+        pmw3610_limit_pending_motion(data, config);
+        data->input_retry_pending =
+            data->input_frame_open || data->dx != 0 || data->dy != 0;
+        if (data->input_retry_pending && !data->input_retry_since_ms) {
+            data->input_retry_since_ms = k_uptime_get();
+        } else if (!data->input_retry_pending) {
+            data->input_retry_since_ms = 0;
+        }
+#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
+        if ((have_x && x_sent) || (have_y && y_sent)) {
+            data->last_rpt_time = now;
+        }
+#endif
+        if (err) {
+            LOG_WRN("Failed to queue PMW3610 input: %d", err);
+        }
+        if (err || data->input_retry_pending) {
+            return -EAGAIN;
         }
     }
 
@@ -515,15 +829,66 @@ static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callba
                                   uint32_t pins) {
     struct pixart_data *data = CONTAINER_OF(cb, struct pixart_data, irq_gpio_cb);
     const struct device *dev = data->dev;
-    pmw3610_set_interrupt(dev, false);
-    k_work_submit(&data->trigger_work);
+    int err = pmw3610_set_interrupt(dev, false);
+    if (err) {
+        LOG_ERR("Failed to disable PMW3610 interrupt: %d", err);
+        return;
+    }
+
+    err = k_work_reschedule_for_queue(&pmw3610_work_q, &data->trigger_work, K_NO_WAIT);
+    if (err < 0) {
+        LOG_ERR("Failed to submit PMW3610 work: %d", err);
+        if (pmw3610_set_interrupt(dev, true)) {
+            pmw3610_begin_recovery(data);
+        }
+    }
 }
 
 static void pmw3610_work_callback(struct k_work *work) {
-    struct pixart_data *data = CONTAINER_OF(work, struct pixart_data, trigger_work);
+    struct k_work_delayable *delayable = k_work_delayable_from_work(work);
+    struct pixart_data *data =
+        CONTAINER_OF(delayable, struct pixart_data, trigger_work);
     const struct device *dev = data->dev;
-    pmw3610_report_data(dev);
-    pmw3610_set_interrupt(dev, true);
+    int report_err = pmw3610_report_data(dev);
+
+    if (data->ready && report_err == -EAGAIN &&
+        (data->input_retry_pending || data->irq_recheck_pending)) {
+        int retry_err = k_work_reschedule_for_queue(
+            &pmw3610_work_q, &data->trigger_work,
+            K_MSEC(PMW3610_IRQ_RECHECK_DELAY_MS));
+        if (retry_err < 0) {
+            LOG_ERR("Failed to schedule PMW3610 retry: %d", retry_err);
+            pmw3610_begin_recovery(data);
+        }
+        return;
+    }
+
+    if (data->ready) {
+        int irq_err = pmw3610_set_interrupt(dev, true);
+        if (irq_err) {
+            LOG_ERR("Failed to re-enable PMW3610 interrupt: %d", irq_err);
+            pmw3610_begin_recovery(data);
+        } else if (report_err) {
+            LOG_DBG("PMW3610 report failed but IRQ was restored: %d", report_err);
+        }
+    }
+}
+
+static void pmw3610_performance_work_callback(struct k_work *work) {
+    struct k_work_delayable *delayable = k_work_delayable_from_work(work);
+    struct pixart_data *data =
+        CONTAINER_OF(delayable, struct pixart_data, performance_work);
+
+    if (!data->ready) {
+        return;
+    }
+
+    int err = pmw3610_set_performance(
+        data->dev, atomic_get(&data->performance_requested) != 0);
+    if (err) {
+        LOG_ERR("Failed to change PMW3610 performance state: %d", err);
+        pmw3610_begin_recovery(data);
+    }
 }
 
 static int pmw3610_init_irq(const struct device *dev) {
@@ -567,12 +932,32 @@ static int pmw3610_init(const struct device *dev) {
 
     // init device pointer
     data->dev = dev;
+    k_mutex_init(&data->spi_mutex);
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
+    data->dx = 0;
+    data->dy = 0;
+#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
+    data->last_smp_time = 0;
+    data->last_rpt_time = 0;
+#endif
+    data->ready = false;
+    data->input_retry_pending = false;
+    data->input_retry_since_ms = 0;
+    data->input_frame_open = false;
+    data->irq_recheck_pending = false;
+    data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+    data->init_retries = 0;
+    data->report_error_count = 0;
+    data->no_motion_irq_count = 0;
+    data->no_motion_irq_since_ms = 0;
+    atomic_set(&data->performance_requested, 1);
 
     // init trigger handler work
-    k_work_init(&data->trigger_work, pmw3610_work_callback);
+    k_work_init_delayable(&data->trigger_work, pmw3610_work_callback);
+    k_work_init_delayable(&data->performance_work,
+                          pmw3610_performance_work_callback);
 
     // init irq routine
     err = pmw3610_init_irq(dev);
@@ -587,7 +972,8 @@ static int pmw3610_init(const struct device *dev) {
     // The sensor is ready to work (i.e., data->ready=true after the above steps are finished)
     k_work_init_delayable(&data->init_work, pmw3610_async_init);
 
-    k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
+    k_work_schedule_for_queue(&pmw3610_work_q, &data->init_work,
+                              K_MSEC(async_init_delay[data->async_init_step]));
 
     return err;
 }
@@ -667,11 +1053,19 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
 
 #define PMW3610_DEFINE(n)                                                                          \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), cpi) >= PMW3610_MIN_CPI &&                               \
+                     DT_PROP(DT_DRV_INST(n), cpi) <= PMW3610_MAX_CPI &&                            \
+                     DT_PROP(DT_DRV_INST(n), cpi) % 200 == 0,                                      \
+                 "PMW3610 cpi must be 200..3200 in steps of 200");                                 \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), max_motion_delta) > 0 &&                                  \
+                     DT_PROP(DT_DRV_INST(n), max_motion_delta) <= 2047,                            \
+                 "PMW3610 max-motion-delta must be 1..2047");                                     \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
         .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \
+        .max_motion_delta = DT_PROP(DT_DRV_INST(n), max_motion_delta),                             \
         .swap_xy = DT_PROP(DT_DRV_INST(n), swap_xy),                                               \
         .inv_x = DT_PROP(DT_DRV_INST(n), invert_x),                                                \
         .inv_y = DT_PROP(DT_DRV_INST(n), invert_y),                                                \
@@ -703,7 +1097,10 @@ static int on_activity_state(const zmk_event_t *eh) {
 
     bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
-        pmw3610_set_performance(pmw3610_devs[i], enable);
+        struct pixart_data *data = pmw3610_devs[i]->data;
+        atomic_set(&data->performance_requested, enable);
+        k_work_reschedule_for_queue(&pmw3610_work_q, &data->performance_work,
+                                    K_NO_WAIT);
     }
 
     return 0;

@@ -35,6 +35,57 @@ config PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS
     Default minimum init power up delay is 10ms.
     Use this config to postpone init power up sequence if needs longer bootup time.
 
+config PMW3610_ALT_INIT_RETRY_BACKOFF_MS
+  int "Delay after an exhausted PMW3610 initialization retry burst (ms)"
+  default 1000
+  range 100 10000
+  help
+    Delay before restarting the full initialization sequence after temporary
+    SPI or sensor failures. Initialization remains asynchronous.
+
+config PMW3610_ALT_RECOVERY_DELAY_MS
+  int "Delay before runtime PMW3610 recovery (ms)"
+  default 20
+  range 10 500
+  help
+    Delay before restarting the sensor after a runtime SPI, FAULT, or IRQ
+    failure. This is intentionally shorter than the startup retry backoff.
+
+config PMW3610_ALT_STUCK_IRQ_TIME_MS
+  int "Time before treating an active IRQ without MOT as stuck (ms)"
+  default 20
+  range 5 500
+
+config PMW3610_ALT_INPUT_RETRY_TIMEOUT_MS
+  int "Maximum time to retain undelivered motion (ms)"
+  default 50
+  range 5 500
+  help
+    Drop undelivered motion after this period so recovery from a congested
+    input pipeline cannot produce a large delayed cursor jump.
+
+config PMW3610_ALT_WORKQUEUE_STACK_SIZE
+  int "PMW3610 work queue stack size"
+  default 1024
+  range 768 4096
+
+config PMW3610_ALT_WORKQUEUE_PRIORITY
+  int "PMW3610 work queue priority"
+  default 1
+  range 0 14
+  help
+    Preemptible priority for PMW3610 processing. The default keeps the system
+    work queue and ZMK input thread responsive during sensor activity.
+
+config PMW3610_ALT_INPUT_REPORT_TIMEOUT_MS
+  int "Maximum PMW3610 input queue wait (ms)"
+  default 0
+  range 0 20
+  help
+    Maximum time to wait for an input event to enter Zephyr's input queue.
+    Zero uses non-blocking delivery. PMW3610 processing runs on a dedicated
+    work queue, but a finite upper bound is retained for custom configurations.
+
 config PMW3610_ALT_REPORT_INTERVAL_MIN
 	int "PMW3610's default minimum report rate"
 	default 0
@@ -54,7 +105,7 @@ config PMW3610_ALT_SMART_ALGORITHM
 config PMW3610_ALT_RUN_DOWNSHIFT_TIME_MS
     int "PMW3610's default RUN mode downshift time"
     default 128
-    range 13 3264
+    range 32 3264
     help
       Default RUN mode downshift down time in milliseconds.
       Time after which sensor goes from RUN to REST1 mode.
@@ -76,21 +127,21 @@ config PMW3610_ALT_REST2_DOWNSHIFT_TIME_MS
 config PMW3610_ALT_REST1_SAMPLE_TIME_MS
     int "PMW3610's sample time in REST1 stage"
     default 40
-    # range 10 2550
+    range 10 2550
     help
       Default REST1 mode sample period in millisecond
 
 config PMW3610_ALT_REST2_SAMPLE_TIME_MS
     int "PMW3610's sample time in REST2 stage"
     default 100
-    # range 10 2550
+    range 10 2550
     help
       Default REST2 mode sample period in millisecond.
 
 config PMW3610_ALT_REST3_SAMPLE_TIME_MS
     int "PMW3610's sample time in REST3 stage"
     default 500
-    # range 10 2550
+    range 10 2550
     help
       Default REST2 mode sample period in millisecond.
 
