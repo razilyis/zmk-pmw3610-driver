@@ -237,10 +237,7 @@ static void pmw3610_apply_low_speed_stabilizer(const struct device *dev,
   struct pixart_data *data = dev->data;
   const struct pixart_config *config = dev->config;
 
-  bool scroll_layer_active =
-      pmw3610_supports_inertia(dev) &&
-      pmw3610_inertial_layer_active(config);
-  if (!config->low_speed_stabilizer || scroll_layer_active) {
+  if (!config->low_speed_stabilizer) {
     pmw3610_reset_micro_motion(data);
     return;
   }
