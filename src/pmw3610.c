@@ -86,16 +86,8 @@ static bool pmw3610_supports_inertia(const struct device *dev) {
   return config->inertial_scroll;
 }
 
-bool pmw3610_inertial_scroll_is_enabled(const struct device *dev) {
+static bool pmw3610_is_scroll_layer(const struct device *dev) {
   const struct pixart_config *config = dev->config;
-
-  if (!config->inertial_scroll) {
-    return false;
-  }
-
-  if (!pmw3610_control_get(PMW3610_CONTROL_INERTIA)) {
-    return false;
-  }
 
   if (config->inertial_scroll_layer_count == 0) {
     return true;
@@ -118,13 +110,26 @@ bool pmw3610_inertial_scroll_is_enabled(const struct device *dev) {
 #endif
 }
 
+bool pmw3610_inertial_scroll_is_enabled(const struct device *dev) {
+  const struct pixart_config *config = dev->config;
+
+  if (!config->inertial_scroll) {
+    return false;
+  }
+
+  if (!pmw3610_control_get(PMW3610_CONTROL_INERTIA)) {
+    return false;
+  }
+
+  return pmw3610_is_scroll_layer(dev);
+}
+
 bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev) {
   const struct pixart_config *config = dev->config;
   if (!config->inertial_scroll && !config->scroll_direction_toggle) {
     return false;
   }
-  if (config->inertial_scroll_layer_count > 0 &&
-      !pmw3610_inertial_scroll_is_enabled(dev)) {
+  if (!pmw3610_is_scroll_layer(dev)) {
     return false;
   }
   return pmw3610_control_get(PMW3610_CONTROL_VERTICAL_DIRECTION);
@@ -136,8 +141,7 @@ bool pmw3610_horizontal_scroll_direction_is_inverted(
   if (!config->inertial_scroll && !config->scroll_direction_toggle) {
     return false;
   }
-  if (config->inertial_scroll_layer_count > 0 &&
-      !pmw3610_inertial_scroll_is_enabled(dev)) {
+  if (!pmw3610_is_scroll_layer(dev)) {
     return false;
   }
   return pmw3610_control_get(PMW3610_CONTROL_HORIZONTAL_DIRECTION);
