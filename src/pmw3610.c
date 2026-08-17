@@ -820,7 +820,7 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi, bool swap_xy,
   LOG_INF("Setting axis swap_xy: %s inv_x: %s inv_y: %s",
           swap_xy ? "yes" : "no", inv_x ? "yes" : "no", inv_y ? "yes" : "no");
 
-if (PMW3610_SWAP_XY_CONFIG)
+#if IS_ENABLED(CONFIG_PMW3610_ALT_SWAP_XY) || IS_ENABLED(CONFIG_PMW3610_SWAP_XY)
   value |= (1 << 7);
 #else
   if (swap_xy) {
@@ -829,7 +829,8 @@ if (PMW3610_SWAP_XY_CONFIG)
     value &= ~(1 << 7);
   }
 #endif
-if (PMW3610_INVERT_X_CONFIG)
+
+#if IS_ENABLED(CONFIG_PMW3610_ALT_INVERT_X) || IS_ENABLED(CONFIG_PMW3610_INVERT_X)
   value |= (1 << 6);
 #else
   if (inv_x) {
@@ -838,7 +839,8 @@ if (PMW3610_INVERT_X_CONFIG)
     value &= ~(1 << 6);
   }
 #endif
-if (PMW3610_INVERT_Y_CONFIG)
+
+#if IS_ENABLED(CONFIG_PMW3610_ALT_INVERT_Y) || IS_ENABLED(CONFIG_PMW3610_INVERT_Y)
   value |= (1 << 5);
 #else
   if (inv_y) {
