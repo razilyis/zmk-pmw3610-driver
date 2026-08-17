@@ -25,10 +25,8 @@ struct pixart_data {
 
   int64_t dx;
   int64_t dy;
-#if (defined(CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) && CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0) || (defined(CONFIG_PMW3610_REPORT_INTERVAL_MIN) && CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0)
   int64_t last_smp_time;
   int64_t last_rpt_time;
-#endif
 
   struct gpio_callback irq_gpio_cb; // motion pin irq callback
   struct k_work_delayable trigger_work; // motion, IRQ recheck, and input retry
