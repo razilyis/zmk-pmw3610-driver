@@ -125,14 +125,6 @@ extern "C" {
 #define PMW3610_SVALUE_TO_CPI(svalue) ((uint32_t)(svalue).val1)
 #define PMW3610_SVALUE_TO_TIME(svalue) ((uint32_t)(svalue).val1)
 
-enum async_init_step {
-  ASYNC_INIT_STEP_POWER_UP = 0,
-  ASYNC_INIT_STEP_CLEAR_OB1,
-  ASYNC_INIT_STEP_CHECK_OB1,
-  ASYNC_INIT_STEP_CONFIGURE,
-  ASYNC_INIT_STEP_COUNT
-};
-
 /** @brief Sensor specific attributes of PMW3610. */
 enum pmw3610_alt_attribute {
   PMW3610_ALT_ATTR_CPI,
