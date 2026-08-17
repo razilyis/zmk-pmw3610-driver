@@ -2,13 +2,13 @@
 
 [English](README.md) | 日本語
 
-## Credits & Respect
+## 謝辞 (Credits & Respect)
 
-This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver).
+本モジュールは、[badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver) をベースとしています。
 
-badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and the Zephyr PMW3610 driver to create a well-structured PMW3610 driver for ZMK — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. His work laid the foundation for trackball integration in ZMK. Deep respect and gratitude to badjeff and the contributors.
+badjeff 氏は、ufan 氏の ZMK PixArt センサードライバー、inorichi 氏の PMW3610 ドライバー、および Zephyr 上流の PMW3610 ドライバーの成果を発展させ、ZMK におけるトラックボール統合の強固な基盤（Split ペリフェラル対応、DTS によるセンサー個別設定、共有 SPI バス対応、超低遅延なダイレクトサンプリングなど）を築かれました。ZMK コミュニティにおけるトラックボール普及の礎となった badjeff 氏およびコントリビューターの皆様の素晴らしい成果に、心より深く敬意と感謝を申し上げます。
 
-このブランチは badjeff の高精度・低遅延なカーソル追従コードをベースに、**ZMK v0.4 (Zephyr 4.1)** 対応と**ドライバーサイド慣性スクロール・制御Behavior** を統合したものです。
+本ブランチ（`Dev-v0.4_inertial-scroll`）は、badjeff 氏の高精度・低遅延なカーソル追従コードを 100% ベースとし、**ZMK v0.4 (Zephyr 4.1)** への完全対応と**ドライバーサイド慣性スクロール・各種制御 Behavior** を統合したものです。
 
 ---
 
