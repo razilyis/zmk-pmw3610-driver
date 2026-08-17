@@ -87,61 +87,72 @@ extern "C" {
 #define PMW3610_SHUTTER_L_POS 6
 
 /* Motion register bits */
-#define PMW3610_MOTION_MOT   BIT(7)
+#define PMW3610_MOTION_MOT BIT(7)
 #define PMW3610_MOTION_FAULT BIT(6)
+
+/* Performance register bits */
+#define PMW3610_PERFORMANCE_FORCED_REST_DISABLED BIT(4)
+#define PMW3610_PERFORMANCE_OPERATION_MODE_NORMAL (0 << 5)
+
+/* Downshift multipliers */
+#define PMW3610_RUN_DOWNSHIFT_MULT 8
+#define PMW3610_REST1_DOWNSHIFT_MULT 8
+#define PMW3610_REST2_DOWNSHIFT_MULT 16
+
+/* Sample time limits */
+#define PMW3610_MAX_SAMPLE_TIME 2550
+#define PMW3610_REST1_SAMPLE_TIME_MS 40
+#define PMW3610_REST2_SAMPLE_TIME_MS 100
+#define PMW3610_REST3_SAMPLE_TIME_MS 500
+#define PMW3610_RUN_DOWNSHIFT_TIME_MS 500
+#define PMW3610_REST1_DOWNSHIFT_TIME_MS 1000
+#define PMW3610_REST2_DOWNSHIFT_TIME_MS 2000
 
 /* cpi/resolution range */
 #define PMW3610_MAX_CPI 3200
 #define PMW3610_MIN_CPI 200
 
-/* inertial scroll fixed-point scale */
-#define PMW3610_INERTIA_SCALE 256
-#define PMW3610_INERTIA_GESTURE_TIMEOUT_MS 80
-#define PMW3610_INERTIA_ATTACK_PREVIOUS_PCT 25
-#define PMW3610_INERTIA_RELEASE_PREVIOUS_PCT 80
+#define PMW3610_INIT_STEP_RETRY_COUNT 3
 #define PMW3610_REPORT_ERROR_RECOVERY_COUNT 3
 #define PMW3610_NO_MOTION_IRQ_RECOVERY_COUNT 3
 #define PMW3610_IRQ_RECHECK_DELAY_MS 1
-#define PMW3610_INPUT_RETRY_DELAY_MS 1
 
 /* write command bit position */
 #define SPI_WRITE_BIT BIT(7)
+#define SPI_READ_BIT  (uint8_t)(~BIT(7))
 
 /* Helper macros used to convert sensor values. */
 #define PMW3610_SVALUE_TO_CPI(svalue) ((uint32_t)(svalue).val1)
 #define PMW3610_SVALUE_TO_TIME(svalue) ((uint32_t)(svalue).val1)
 
-bool pmw3610_inertial_scroll_is_enabled(const struct device *dev);
-int pmw3610_set_inertial_scroll_enabled(const struct device *dev, bool enabled);
-void pmw3610_set_inertial_scroll_all(bool enabled);
-void pmw3610_toggle_inertial_scroll_all(void);
-bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev);
-void pmw3610_set_vertical_scroll_direction_all(bool inverted);
-void pmw3610_toggle_vertical_scroll_direction_all(void);
-bool pmw3610_horizontal_scroll_direction_is_inverted(const struct device *dev);
-void pmw3610_set_horizontal_scroll_direction_all(bool inverted);
-void pmw3610_toggle_horizontal_scroll_direction_all(void);
+enum async_init_step {
+  ASYNC_INIT_STEP_POWER_UP = 0,
+  ASYNC_INIT_STEP_CLEAR_OB1,
+  ASYNC_INIT_STEP_CHECK_OB1,
+  ASYNC_INIT_STEP_CONFIGURE,
+  ASYNC_INIT_STEP_COUNT
+};
 
 /** @brief Sensor specific attributes of PMW3610. */
-enum pmw3610_attribute {
-	PMW3610_ATTR_CPI,
-	PMW3610_ATTR_RUN_DOWNSHIFT_TIME,
-	PMW3610_ATTR_REST1_DOWNSHIFT_TIME,
-	PMW3610_ATTR_REST2_DOWNSHIFT_TIME,
-	PMW3610_ATTR_REST1_SAMPLE_TIME,
-	PMW3610_ATTR_REST2_SAMPLE_TIME,
-	PMW3610_ATTR_REST3_SAMPLE_TIME,
+enum pmw3610_alt_attribute {
+  PMW3610_ALT_ATTR_CPI,
+  PMW3610_ALT_ATTR_RUN_DOWNSHIFT_TIME,
+  PMW3610_ALT_ATTR_REST1_DOWNSHIFT_TIME,
+  PMW3610_ALT_ATTR_REST2_DOWNSHIFT_TIME,
+  PMW3610_ALT_ATTR_REST1_SAMPLE_TIME,
+  PMW3610_ALT_ATTR_REST2_SAMPLE_TIME,
+  PMW3610_ALT_ATTR_REST3_SAMPLE_TIME,
 };
 
-enum pmw3610_alt_attribute {
-	PMW3610_ALT_ATTR_CPI = PMW3610_ATTR_CPI,
-	PMW3610_ALT_ATTR_RUN_DOWNSHIFT_TIME = PMW3610_ATTR_RUN_DOWNSHIFT_TIME,
-	PMW3610_ALT_ATTR_REST1_DOWNSHIFT_TIME = PMW3610_ATTR_REST1_DOWNSHIFT_TIME,
-	PMW3610_ALT_ATTR_REST2_DOWNSHIFT_TIME = PMW3610_ATTR_REST2_DOWNSHIFT_TIME,
-	PMW3610_ALT_ATTR_REST1_SAMPLE_TIME = PMW3610_ATTR_REST1_SAMPLE_TIME,
-	PMW3610_ALT_ATTR_REST2_SAMPLE_TIME = PMW3610_ATTR_REST2_SAMPLE_TIME,
-	PMW3610_ALT_ATTR_REST3_SAMPLE_TIME = PMW3610_ATTR_REST3_SAMPLE_TIME,
-};
+void pmw3610_toggle_inertial_scroll_all(void);
+void pmw3610_toggle_vertical_scroll_direction_all(void);
+void pmw3610_toggle_horizontal_scroll_direction_all(void);
+void pmw3610_invert_scroll_all(bool invert);
+void pmw3610_invert_horizontal_scroll_all(bool invert);
+void pmw3610_set_inertial_scroll_all(bool enabled);
+bool pmw3610_inertial_scroll_is_enabled(const struct device *dev);
+bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev);
+bool pmw3610_horizontal_scroll_direction_is_inverted(const struct device *dev);
 
 #ifdef __cplusplus
 }

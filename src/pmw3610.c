@@ -569,7 +569,7 @@ static int pmw3610_set_interrupt(const struct device *dev, const bool en) {
 
 static int pmw3610_async_init_power_up(const struct device *dev) {
   return pmw3610_write(dev, PMW3610_REG_POWER_UP_RESET,
-                       PMW3610_POWERUP_RESET_CMD);
+                       PMW3610_POWERUP_CMD_RESET);
 }
 
 static int pmw3610_async_init_clear_ob1(const struct device *dev) {
