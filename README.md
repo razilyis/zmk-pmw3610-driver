@@ -1,72 +1,61 @@
-# PMW3610 driver implementation for ZMK
+# PMW3610 Driver for ZMK — Dev-v0.4_inertial-scroll
 
-This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
+English | [日本語](README_JA.md)
 
-This driver had been tested on [my PMW3610 breakout board](https://github.com/badjeff/pmw3610-pcb).
+## Credits & Respect
 
-> [!IMPORTANT]
-> 🚨 Breaking Change for `main`/`zmk-0.4` branch of this module:
->
-> To avoid conflicts with the upstream Zephyr driver module, changes need to be made to the existing configuration in order to use this module in the current version of ZMK.
-> - Compatible string changed to `pixart,pmw3610-alt`
-> - All config prefix changed to `CONFIG_PMW3610_ALT_*`
+This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver).
 
-#### What is different to [inorichi's driver](https://github.com/inorichi/zmk-pmw3610-driver)
-- Compatible to be used on split peripheral shield.
-- Replaced `CONFIG_PMW3610_ORIENTATION_*` with ~~`CONFIG_PMW3610_SWAP_XY` and `PMW3610_INVERT_*`~~ device tree node attributes `swap-xy;`, `invert-x;` and `invert-y;`. Then now, it can used on [leylabella](https://github.com/badjeff/leylabella), which has different sensor breakout pcb orientation on one device.
-- Moved `CONFIG_PMW3610_CPI` to device tree node `.dts/.overlay`. It is now allowed to setup diffeent config for multi-sensor on single shield. In case of building typical mouse shield, we use one movment sensor on bottom, and another sensor for scrolling on top. Those settings could be distinguishable.
-- Features for scroll-mode, snipe-mode, and auto-layer are no longer needed to be provided from sensor driver. Those settings is now configurable in keymap with layer-based `zmk,input-listener`, instead of setup static value in shield config files.
-- Seperating sampling rate and reporting rate. It reports accumulated XY axes displacement between data ready interrupts. You will still feeling lag and jumpy in noisy radio hell, but the cursor traction should being lossless, and predicable in exact terms.
-- Default to use power saving config. Applying shorter-than-default downshift time to PMW3610.
-- Deprecated manual *chip-select*. Refactored to use Zephyr's `spi_transceive_dt()`. That allow the sensor could be attacted to a shared SPI bus, works along with others SPI peripherals, such as display module.
+badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and the [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c) to create a well-structured PMW3610 driver for ZMK — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. Deep respect and gratitude to badjeff and all original contributors.
+
+This branch brings full **ZMK v0.4 (Zephyr 4.1)** support along with driver-side inertial scrolling, low-speed micro-motion stabilization, and runtime toggle behaviors.
+
+---
+
+## Key Features in `Dev-v0.4_inertial-scroll`
+
+### 🟢 ZMK v0.4 (Zephyr 4.1) Full Compatibility
+- Compatible string: `pixart,pmw3610-alt` (prevents conflicts with Zephyr upstream driver; `pixart,pmw3610` also supported).
+- Kconfig prefix: `CONFIG_PMW3610_ALT_*` (with fallback to `CONFIG_PMW3610_*`).
+- Integrated with Zephyr 4.1 input subsystem and driver APIs.
+
+### 🟢 Driver-Side Inertial Scrolling
+- **Smooth Inertia**: Emits natural, exponential-decay scrolling when trackball is flicked on designated scroll layers.
+- **Time-Normalized Gesture Velocity**: Velocity is estimated over time intervals to avoid sudden runaway velocity when waking from REST mode.
+- **Fade & Duration Bounds**: Configurable maximum duration (default 1800ms) with a linear fade-out (250ms).
+
+### 🟢 Low-Speed Stabilizer (`low-speed-stabilizer`)
+- Stabilizes slow, precise pointer movement by filtering micro-jitter while preserving true intentional movement. Automatically bypassed on scroll layers.
+
+### 🟢 Runtime Control Behaviors & Split Sync
+- Zero-parameter behaviors to toggle features from keymap:
+  - `&pmw3610_inertia_toggle`
+  - `&pmw3610_scroll_direction_toggle`
+  - `&pmw3610_horizontal_scroll_direction_toggle`
+- Synchronizes layer and toggle state across split Central and Peripheral halves.
+
+---
 
 ## Installation
 
-Include this project on ZMK's west manifest in `config/west.yml`:
+### 1. Add to `config/west.yml`
 
-```yml
+```yaml
 manifest:
   remotes:
-    ...
-    # START #####
-    - name: badjeff
-      url-base: https://github.com/badjeff
-    # END #######
-    ...
+    - name: razilyis
+      url-base: https://github.com/razilyis
   projects:
-    ...
-    # START #####
     - name: zmk-pmw3610-driver
-      remote: badjeff
-      revision: main
-    # END #######
-    ...
+      remote: razilyis
+      revision: Dev-v0.4_inertial-scroll
   self:
     path: config
 ```
 
-Update `board.overlay` adding the necessary bits (update the pins for your board accordingly):
+### 2. Configure Device Tree (`<shield>.overlay`)
 
 ```dts
-&pinctrl {
-    spi0_default: spi0_default {
-        group1 {
-            psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
-                <NRF_PSEL(SPIM_MOSI, 0, 17)>,
-                <NRF_PSEL(SPIM_MISO, 0, 17)>;
-        };
-    };
-
-    spi0_sleep: spi0_sleep {
-        group1 {
-            psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
-                <NRF_PSEL(SPIM_MOSI, 0, 17)>,
-                <NRF_PSEL(SPIM_MISO, 0, 17)>;
-            low-power-enable;
-        };
-    };
-};
-
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 
 &spi0 {
@@ -75,62 +64,73 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
     pinctrl-0 = <&spi0_default>;
     pinctrl-1 = <&spi0_sleep>;
     pinctrl-names = "default", "sleep";
-    cs-gpios = <&gpio0 20 GPIO_ACTIVE_LOW>;
+    cs-gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
 
     trackball: trackball@0 {
         status = "okay";
         compatible = "pixart,pmw3610-alt";
         reg = <0>;
         spi-max-frequency = <2000000>;
-        irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        cpi = <600>;
-        // swap-xy; /* optional */
-        // invert-x; /* optional */
-        // invert-y; /* optional */
+        irq-gpios = <&gpio0 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+        cpi = <400>;
         evt-type = <INPUT_EV_REL>;
         x-input-code = <INPUT_REL_X>;
         y-input-code = <INPUT_REL_Y>;
-        motion-threshold = <1>;
-        /* Ignore drift-sized samples when both axes are at or below this value.
-           Set to 0 to disable this filter. */
-        max-motion-delta = <512>;
-        max-report-delta = <2047>;
 
+        /* Inertial scrolling */
+        inertial-scroll;
+        inertial-scroll-layers = <6 7>;
+        inertial-scroll-gain-pct = <130>;
+        inertial-scroll-decay-pct = <99>;
+
+        /* Low speed micro-motion stabilizer */
+        low-speed-stabilizer;
+
+        /* Power management */
         force-awake;
-        /* keep the sensor awake while ZMK activity state is ACTIVE,
-           fallback to normal downshift mode after ZMK goes into IDLE / SLEEP mode.
-           thus, the sensor would be a `wakeup-source` */
-
-        force-awake-4ms-mode;
-        /* while force-awake is acitvated, enable this mode to force sampling per 
-           4ms, where the default sampling rate is 8ms. */
-        /* NOTE: apply this mode if you need 250Hz with direct USB connection. */
     };
-};
-
-/ {
-  trackball_listener {
-    compatible = "zmk,input-listener";
-    device = <&trackball>;
-  };
 };
 ```
 
-Enable the driver config in `<shield>.config` file (read the Kconfig file to find out all possible options):
+### 3. Shield Configuration (`<shield>.conf`)
 
 ```conf
 CONFIG_SPI=y
 CONFIG_INPUT=y
 CONFIG_ZMK_POINTING=y
 CONFIG_PMW3610_ALT=y
-# CONFIG_PMW3610_ALT_SWAP_XY=y // <-- deprecated, use swap-xy; instead
-# CONFIG_PMW3610_ALT_INVERT_X=y // <-- deprecated, use invert-x; instead
-# CONFIG_PMW3610_ALT_INVERT_Y=y // <-- deprecated, use invert-y; instead
-# CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN=12
-# CONFIG_PMW3610_ALT_LOG_LEVEL_DBG=y
-# CONFIG_PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS=300 // <--see Troubleshooting
+CONFIG_PMW3610_ALT_SMART_ALGORITHM=y
 ```
 
-## Troubleshooting
+---
 
-If you are getting `Incorrect product id 0xFF (expecting 0x3E)!` on `nice_nano_v2` board from the log, you'd want to apply `CONFIG_PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS=1000` in your shield .conf/.overlay file. Due to this driver doesn't offer module dependancy setting, that would ensure external power (to enable VCC pin on board) is ready, the `CONFIG_PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS` would use to add extra one second delay of power up.
+## Behaviors & Keymap Editor Compatibility
+
+To use the behaviors in **Keymap Editor** (nickcoutsos/keymap-editor), define them in `behaviors { ... }` in your `.keymap` file:
+
+```dts
+/ {
+    behaviors {
+        pmw3610_inertia_toggle: pmw3610_inertia_toggle {
+            compatible = "zmk,behavior-pmw3610-inertia-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_INERTIA_TOGGLE";
+            display-name = "PMW3610 Inertia Toggle";
+        };
+
+        pmw3610_scroll_direction_toggle: pmw3610_scroll_direction_toggle {
+            compatible = "zmk,behavior-pmw3610-scroll-direction-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_SCROLL_DIRECTION_TOGGLE";
+            display-name = "PMW3610 Scroll Direction Toggle";
+        };
+
+        pmw3610_horizontal_scroll_direction_toggle: pmw3610_horizontal_scroll_direction_toggle {
+            compatible = "zmk,behavior-pmw3610-horizontal-scroll-direction-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_HORIZONTAL_SCROLL_DIRECTION_TOGGLE";
+            display-name = "PMW3610 Horizontal Scroll Direction Toggle";
+        };
+    };
+};
+```

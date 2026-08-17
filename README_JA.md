@@ -1,4 +1,4 @@
-# zmk-pmw3610-driver — Dev-v0.3_inertial-scroll
+# zmk-pmw3610-driver — Dev-v0.4_inertial-scroll
 
 [English](README.md) | 日本語
 
@@ -6,26 +6,30 @@
 
 This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver).
 
-badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad) and [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver) to create a well-structured PMW3610 driver for ZMK v0.3 — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. His work laid the foundation for trackball integration in ZMK, and this branch would not exist without it. Deep respect and gratitude to badjeff for his contributions to the community.
+badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and the Zephyr PMW3610 driver to create a well-structured PMW3610 driver for ZMK — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. His work laid the foundation for trackball integration in ZMK. Deep respect and gratitude to badjeff and the contributors.
 
-このブランチはその実装をベースに、以下の追加改良を加えたものです。
+このブランチはその実装をベースに、**ZMK v0.4 (Zephyr 4.1)** に対応し、慣性スクロール・低速スタビライザー・各種トグルBehaviorを追加したものです。
 
 ---
 
-## このブランチ (Dev-v0.3_inertial-scroll) の概要
+## このブランチ (Dev-v0.4_inertial-scroll) の概要
 
-### 安定性・電源管理の改善
+### 🟢 ZMK v0.4 (Zephyr 4.1) への完全対応
+- **DTS Compatible**: `pixart,pmw3610-alt`（Zephyr 4.1 上流ドライバとの衝突を回避。従来の `pixart,pmw3610` も互換サポート）
+- **Kconfig プレフィックス**: `CONFIG_PMW3610_ALT_*`（`CONFIG_PMW3610_*` も自動フォールバック）
+- **Zephyr 4.1 Input Subsystem**: 新しい入力基盤および Device Driver API に適合
 
-- **レベルトリガ割り込み**: エッジトリガではなくレベルトリガ (`GPIO_INT_LEVEL_ACTIVE`) を採用し、割り込み無効期間中のモーションイベント取りこぼしを防止。
-- **フェイルセーフ初期化**: SPI 初期化失敗時に最大3回リトライし、連続失敗時はデフォルト1秒のバックオフ後に初期化を最初からやり直す。バックオフ時間は `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` で変更できる。
-- **FAULT リカバリ & ジャンプ防止**: FAULT 検知時に蓄積済みの移動量 (`dx`, `dy`) と慣性状態を破棄し、復帰後のカーソル暴走を防止。
-- **入力キュー保護**: X/Y の斜め移動を1つの同期レポートに保ち、X投入後は対応するYが入るまで待つことで、未完了イベントが後から混入することを防止。
-- **慣性状態の排他制御**: 慣性ワーク、トグル、FAULT復旧が同時に走っても、停止後に古い慣性ワークが状態を再生成しないよう保護。
-- **IDLE 省電力の修正**: `force_awake_4ms_mode` が IDLE 移行後も4ms レートを維持し続けるバグを修正。IDLE 時は正しく 8ms デフォルトレートに落ちて省電力動作する。
+### 🟢 ドライバーサイド慣性スクロール
+- **心地よい滑り心地**: スクロールレイヤーでトラックボールをフリックした際、指を離した後も指数関数的な減速を伴ってなめらかにスクロールが継続します。
+- **ジェスチャー速度の正規化**: 最後の1サンプルだけでなく、レポート間隔で時間正規化した直近のフリック速度から慣性初速を算出。REST 復帰時の過剰な飛び出し（暴走）を防ぎつつ、素早いフリックの勢いを保持します。
+- **継続時間・フェード制御**: 最大持続時間（デフォルト: 1800ms）と終了前の線形フェードアウト（250ms）により、不自然な急停止のない自然な減速を実現。
 
-### ドライバーサイド慣性スクロール
+### 🟢 低速カーソル安定化 (`low-speed-stabilizer`)
+- 微細な手振れやセンサーの微小ノイズを検知・相殺。ポインタを止めたいときの意図しないカーソルブレを抑制し、精密なポインティングを可能にします。スクロールレイヤーでは自動的にバイパスされます。
 
-PMW3610 をスクロールデバイスとして使うレイヤーで、指を離した後もスクロールが慣性で継続する機能をドライバ側で実装しています。
+### 🟢 リアルタイム制御ビヘイビア & Split同期
+- キーマップからいつでも慣性スクロールの ON/OFF、縦スクロール・横スクロールの正転/反転をトグル切り替え可能。
+- Split 構成（Central ↔ Peripheral 間）でのレイヤー状態および制御状態の双方向同期に対応。
 
 ---
 
@@ -43,7 +47,7 @@ manifest:
   projects:
     - name: zmk-pmw3610-driver
       remote: razilyis
-      revision: Dev-v0.3_inertial-scroll
+      revision: Dev-v0.4_inertial-scroll
   self:
     path: config
 ```
@@ -53,24 +57,6 @@ manifest:
 `<board>.overlay` にセンサーの設定を追記します（ピン番号は基板に合わせて変更してください）：
 
 ```dts
-&pinctrl {
-    spi0_default: spi0_default {
-        group1 {
-            psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
-                    <NRF_PSEL(SPIM_MOSI, 0, 17)>,
-                    <NRF_PSEL(SPIM_MISO, 0, 17)>;
-        };
-    };
-    spi0_sleep: spi0_sleep {
-        group1 {
-            psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
-                    <NRF_PSEL(SPIM_MOSI, 0, 17)>,
-                    <NRF_PSEL(SPIM_MISO, 0, 17)>;
-            low-power-enable;
-        };
-    };
-};
-
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 
 &spi0 {
@@ -79,50 +65,34 @@ manifest:
     pinctrl-0 = <&spi0_default>;
     pinctrl-1 = <&spi0_sleep>;
     pinctrl-names = "default", "sleep";
-    cs-gpios = <&gpio0 20 GPIO_ACTIVE_LOW>;
+    cs-gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
 
     trackball: trackball@0 {
         status = "okay";
-        compatible = "pixart,pmw3610";
+        compatible = "pixart,pmw3610-alt";
         reg = <0>;
         spi-max-frequency = <2000000>;
-        irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        cpi = <600>;
+        irq-gpios = <&gpio0 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+        cpi = <400>;
         evt-type = <INPUT_EV_REL>;
         x-input-code = <INPUT_REL_X>;
         y-input-code = <INPUT_REL_Y>;
 
-        /* ドリフトフィルタ: 0 で無効化 */
-        motion-threshold = <1>;
-
-        /* 異常な単発移動量を破棄（任意、デフォルト 512） */
-        max-motion-delta = <512>;
-
-        /* 蓄積後の1レポートを制限（任意、デフォルト 2047） */
-        max-report-delta = <2047>;
-
-        /* 慣性スクロール（任意） */
+        /* 慣性スクロール */
         inertial-scroll;
         inertial-scroll-layers = <6 7>;   /* 有効にするレイヤー番号。省略時は全レイヤーで有効 */
         inertial-scroll-gain-pct = <130>;
         inertial-scroll-decay-pct = <99>;
-        inertial-scroll-interval-ms = <10>;
-        inertial-scroll-threshold = <4>;
 
-        /* 省電力制御（任意） */
+        /* 低速スタビライザー */
+        low-speed-stabilizer;
+
+        /* 省電力制御 */
         force-awake;          /* ACTIVE 時はセンサーを常時起動 */
-        force-awake-4ms-mode; /* ACTIVE 時に 4ms サンプリングを強制（USB 接続で 250Hz が必要な場合） */
 
         // swap-xy;   /* 任意: XY 軸の入れ替え */
         // invert-x;  /* 任意: X 軸の反転 */
         // invert-y;  /* 任意: Y 軸の反転 */
-    };
-};
-
-/ {
-    trackball_listener {
-        compatible = "zmk,input-listener";
-        device = <&trackball>;
     };
 };
 ```
@@ -135,10 +105,9 @@ manifest:
 CONFIG_SPI=y
 CONFIG_INPUT=y
 CONFIG_ZMK_POINTING=y
-CONFIG_PMW3610=y
-# CONFIG_PMW3610_REPORT_INTERVAL_MIN=12  # 任意: 最小レポート間隔 (ms)
-# CONFIG_PMW3610_LOG_LEVEL_DBG=y         # 任意: デバッグログ
-# CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=300  # トラブルシューティング参照
+CONFIG_PMW3610_ALT=y
+CONFIG_PMW3610_ALT_SMART_ALGORITHM=y
+# CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN=15  # 任意: 最小レポート間隔 (ms)
 ```
 
 ---
@@ -185,16 +154,6 @@ CONFIG_PMW3610=y
 | `scroll-direction-toggle` | boolean | — | `inertial-scroll`を使わないスクロール専用センサーも方向トグルの対象にする |
 | `vertical-scroll-uses-x-axis` | boolean | false | 90度回転して搭載したセンサーで、生のX軸を縦スクロール方向トグルの対象にする |
 
-`inertial-scroll-layers` は、同じ PMW3610 をポインタとスクロールで兼用する場合に使います。スクロールレイヤーの番号だけを指定してください：
-
-```dts
-inertial-scroll-layers = <6 7>;
-```
-
-慣性初速は最後の1レポートだけではなく、実際のレポート間隔で時間正規化した直近のジェスチャー速度から算出します。新しいジェスチャーの最初のレポートは、ACTIVE中ならRUN周期とレポート間引き設定、IDLE後なら経過時間から推定したRUN/REST周期を使用します。これにより短いフリックの勢いを保ちながら、REST復帰時に蓄積デルタから過剰な慣性が生成されるのを防ぎます。加速には素早く追従し、減速にはゆっくり追従するため、速いフリックの終端で指が自然に減速しても勢いが残ります。80msを超えて入力が途切れた場合や方向が反転した場合は、新しいジェスチャーとして速度履歴をリセットします。
-
-センサーを90度回転して搭載し、生のX軸を縦スクロールへ変換する場合は、センサーノードへ `vertical-scroll-uses-x-axis;` を追加してください。
-
 ### 低速カーソル安定化
 
 | プロパティ | 型 | デフォルト | 説明 |
@@ -203,78 +162,62 @@ inertial-scroll-layers = <6 7>;
 | `low-speed-stabilizer-threshold` | int | 1 | マイクロモーションとして扱う最大絶対値 |
 | `low-speed-stabilizer-timeout-ms` | int | 30 | 無入力後に方向履歴をリセットする時間。停止後の最初の微小入力は保留せず出力する |
 
-同方向の小さな入力は確認後に距離を保持したまま出力し、単発の逆方向入力は一旦保留します。次の入力が元の方向へ戻ればノイズとして相殺し、逆方向が続けば意図した方向転換としてまとめて出力します。`inertial-scroll-layers`で指定したスクロールレイヤーでは自動的にバイパスされます。
+---
 
-### 安全・復旧関連のKconfig
+## 制御Behavior（トグルキー）
 
-| 設定 | デフォルト | 説明 |
-|---|---|---|
-| `CONFIG_PMW3610_INPUT_REPORT_TIMEOUT_MS` | 0 | 入力キューへ1イベントを追加するときの最大待機時間（0〜20ms）。0はノンブロッキング送信 |
-| `CONFIG_PMW3610_INPUT_RETRY_TIMEOUT_MS` | 50 | 未送信フレームを保持して再試行する最大時間。超過後は移動量を破棄する |
-| `CONFIG_PMW3610_INIT_RETRY_BACKOFF_MS` | 1000 | 初期化を3回再試行しても失敗した場合、初期化全体をやり直すまでの待機時間（100〜10000ms） |
-| `CONFIG_PMW3610_RECOVERY_DELAY_MS` | 20 | SPI・FAULT・IRQ異常後にランタイム復旧を始めるまでの短い待機時間 |
-| `CONFIG_PMW3610_STUCK_IRQ_TIME_MS` | 20 | MOTなしでIRQ activeが継続した場合に固着と判定するまでの最短時間 |
-| `CONFIG_PMW3610_WORKQUEUE_STACK_SIZE` | 1536 | PMW3610専用workqueue用に確保するスタックサイズ |
-| `CONFIG_PMW3610_WORKQUEUE_PRIORITY` | 10 | PMW3610専用workqueueのプリエンプティブ優先度 |
+キーマップから各機能をオン/オフできるゼロパラメータのビヘイビアを利用できます。
+
+| ビヘイビア名 | 説明 |
+|---|---|
+| `&pmw3610_inertia_toggle` | 慣性スクロールの有効 / 無効をトグル切り替え |
+| `&pmw3610_scroll_direction_toggle` | 縦スクロール方向（正転 / 反転）をトグル切り替え |
+| `&pmw3610_horizontal_scroll_direction_toggle` | 横スクロール方向（正転 / 反転）をトグル切り替え |
+
+### 使用方法
+
+1. **通常ビルドの場合**:
+   `.keymap` ファイルの先頭で各 dtsi を include します：
+   ```dts
+   #include <behaviors/pmw3610_inertia_toggle.dtsi>
+   #include <behaviors/pmw3610_scroll_direction_toggle.dtsi>
+   #include <behaviors/pmw3610_horizontal_scroll_direction_toggle.dtsi>
+   ```
+
+2. **[Keymap Editor (nickcoutsos)](https://github.com/nickcoutsos/keymap-editor) をお使いの場合**:
+   Web 版 Keymap Editor は外部 west モジュールを直接解析しないため、`.keymap` の `behaviors { ... }` ブロック内に直接ビヘイビアノードを定義することで、GUI 上に選択肢が表示されます：
+   ```dts
+   / {
+       behaviors {
+           pmw3610_inertia_toggle: pmw3610_inertia_toggle {
+               compatible = "zmk,behavior-pmw3610-inertia-toggle";
+               #binding-cells = <0>;
+               label = "PMW3610_INERTIA_TOGGLE";
+               display-name = "PMW3610 Inertia Toggle";
+           };
+
+           pmw3610_scroll_direction_toggle: pmw3610_scroll_direction_toggle {
+               compatible = "zmk,behavior-pmw3610-scroll-direction-toggle";
+               #binding-cells = <0>;
+               label = "PMW3610_SCROLL_DIRECTION_TOGGLE";
+               display-name = "PMW3610 Scroll Direction Toggle";
+           };
+
+           pmw3610_horizontal_scroll_direction_toggle: pmw3610_horizontal_scroll_direction_toggle {
+               compatible = "zmk,behavior-pmw3610-horizontal-scroll-direction-toggle";
+               #binding-cells = <0>;
+               label = "PMW3610_HORIZONTAL_SCROLL_DIRECTION_TOGGLE";
+               display-name = "PMW3610 Horizontal Scroll Direction Toggle";
+           };
+       };
+   };
+   ```
 
 ---
 
-## 慣性スクロールのトグルキー
-
-キーマップから慣性スクロールをオン/オフするゼロパラメータのビヘイビアを利用できます。
-
-`.keymap` ファイルに以下を追加します：
-
-```dts
-#include <behaviors/pmw3610_inertia_toggle.dtsi>
-```
-
-任意のレイヤーのキーに割り当てます：
-
-```dts
-&pmw3610_inertia_toggle
-```
-
-## 縦スクロール方向のトグルキー
-
-縦スクロールの正転・逆転を切り替えるゼロパラメータのビヘイビアを利用できます。
-
-`.keymap` ファイルに以下を追加します：
-
-```dts
-#include <behaviors/pmw3610_scroll_direction_toggle.dtsi>
-```
-
-任意のキーに割り当てます：
-
-```dts
-&pmw3610_scroll_direction_toggle
-```
-
-Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送されます。
-単純な反転命令ではなく、Centralで確定したON/OFF状態を明示的に配送します。
-`inertial-scroll-layers` が指定されたセンサーでは対象レイヤーだけを反転するため、
-通常のカーソル方向には影響しません。方向トグルは `inertial-scroll` が有効なセンサーだけを対象とし、通常のポインター専用センサーには影響しません。慣性を使わないスクロール専用センサーを対象にする場合だけ、センサーノードへ `scroll-direction-toggle;` を追加してください。切替時には進行中の慣性を停止します。
-
-## 横スクロール方向のトグルキー
-
-横スクロールの正転・逆転を切り替えるゼロパラメータのビヘイビアを利用できます。
-
-```dts
-#include <behaviors/pmw3610_horizontal_scroll_direction_toggle.dtsi>
-```
-
-任意のキーに割り当てます：
-
-```dts
-&pmw3610_horizontal_scroll_direction_toggle
-```
-
-縦方向と同様にGlobal Behaviorとして配送され、対象センサーの通常スクロールと慣性スクロールの両方へ反映されます。対象条件は縦方向と同じです。`vertical-scroll-uses-x-axis` が指定されたセンサーでは、X軸を縦、Y軸を横として扱います。未指定時はY軸が縦、X軸が横です。
-
 ## 制御Behaviorの初期状態
 
-設定が保存されていない初回起動時の状態は以下です。
+初回起動時のデフォルト状態は以下です：
 
 | 制御 | 初期状態 |
 |---|---|
@@ -282,21 +225,4 @@ Split構成ではGlobal BehaviorとしてCentralとPeripheralの両方へ配送�
 | 縦スクロール方向の反転 | OFF |
 | 横スクロール方向の反転 | OFF |
 
-`CONFIG_SETTINGS=y` で保存済みの状態がある場合は、その値を起動時に復元します。
-
-## 片側センサー構成
-
-PMW3610デバイスの列挙は0台、1台、複数台のすべてに対応します。Behavior制御部は `CONFIG_PMW3610` とは独立してビルドされるため、センサーがCentralだけ、Peripheralだけ、または両側にある構成を利用できます。センサーのない側は状態同期だけを担当し、搭載側のセンサーへ設定を適用します。
-
-Split PeripheralはCentralのキーマップレイヤーを直接参照できないため、アクティブレイヤーを制御Behavior経由で同期します。これによりPeripheral側だけにセンサーがある場合も `inertial-scroll-layers` が機能します。起動時とレイヤー・トグル変更時に同期し、失敗時は有限回再試行します。常時5秒ポーリングは行わないため、再試行終了後に再接続した場合は、次のレイヤー変更またはトグル操作で再同期されます。
-
-このレイヤー同期は `pmw3610_inertia_toggle` Behaviorを同期経路として使用します。Split Peripheral上のセンサーで `inertial-scroll-layers` を使う場合は、`pmw3610_inertia_toggle.dtsi` をincludeし、キーマップから `&pmw3610_inertia_toggle` を参照してBehavior nodeが有効になるようにしてください。各dtsiのBehavior nodeには `/omit-if-no-ref/` が指定されているため、includeするだけで参照がない場合はビルド時に除去されます。
-
-### keymap-editor をお使いの場合
-
-[nickcoutsos/keymap-editor](https://github.com/nickcoutsos/keymap-editor) は外部 west モジュールのビヘイビアをUI経由で追加できません。ただし、既に `.keymap` に記載されているバインディングはそのまま保持されます。
-
-**ワークアラウンド**: configリポジトリ側の `.keymap` にBehavior nodeを定義するか、
-`&pmw3610_inertia_toggle` / `&pmw3610_scroll_direction_toggle` /
-`&pmw3610_horizontal_scroll_direction_toggle` を手書きで割り当ててください。
-外部westモジュールを直接解析しないEditorでも既存バインディングは保持されます。
+`CONFIG_SETTINGS=y` が有効な場合は、トグルで変更した状態が自動的にフラッシュメモリへ保存され、再起動後も復元されます。
