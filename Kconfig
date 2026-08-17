@@ -9,7 +9,7 @@ menuconfig PMW3610_ALT
   bool "PMW3610 mouse optical sensor"
   select SPI
   depends on INPUT
-  depends on DT_HAS_PIXART_PMW3610_ALT_ENABLED
+  depends on (DT_HAS_PIXART_PMW3610_ALT_ENABLED || DT_HAS_PIXART_PMW3610_ENABLED)
   help
       Enable PMW3610 mouse optical sensor.
 
@@ -66,8 +66,10 @@ config PMW3610_ALT_INPUT_RETRY_TIMEOUT_MS
 
 config PMW3610_ALT_WORKQUEUE_STACK_SIZE
   int "PMW3610 work queue stack size"
-  default 1024
+  default 1536
   range 768 4096
+  help
+    Stack size allocated for the dedicated PMW3610 work queue.
 
 config PMW3610_ALT_WORKQUEUE_PRIORITY
   int "PMW3610 work queue priority"

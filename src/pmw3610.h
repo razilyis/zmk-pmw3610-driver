@@ -87,17 +87,22 @@ extern "C" {
 #define PMW3610_SHUTTER_L_POS 6
 
 /* Motion register bits */
-#define PMW3610_MOTION_MOT BIT(7)
+#define PMW3610_MOTION_MOT   BIT(7)
 #define PMW3610_MOTION_FAULT BIT(6)
 
 /* cpi/resolution range */
 #define PMW3610_MAX_CPI 3200
 #define PMW3610_MIN_CPI 200
 
-#define PMW3610_INIT_STEP_RETRY_COUNT 3
+/* inertial scroll fixed-point scale */
+#define PMW3610_INERTIA_SCALE 256
+#define PMW3610_INERTIA_GESTURE_TIMEOUT_MS 80
+#define PMW3610_INERTIA_ATTACK_PREVIOUS_PCT 25
+#define PMW3610_INERTIA_RELEASE_PREVIOUS_PCT 80
 #define PMW3610_REPORT_ERROR_RECOVERY_COUNT 3
 #define PMW3610_NO_MOTION_IRQ_RECOVERY_COUNT 3
 #define PMW3610_IRQ_RECHECK_DELAY_MS 1
+#define PMW3610_INPUT_RETRY_DELAY_MS 1
 
 /* write command bit position */
 #define SPI_WRITE_BIT BIT(7)
@@ -106,30 +111,36 @@ extern "C" {
 #define PMW3610_SVALUE_TO_CPI(svalue) ((uint32_t)(svalue).val1)
 #define PMW3610_SVALUE_TO_TIME(svalue) ((uint32_t)(svalue).val1)
 
+bool pmw3610_inertial_scroll_is_enabled(const struct device *dev);
+int pmw3610_set_inertial_scroll_enabled(const struct device *dev, bool enabled);
+void pmw3610_set_inertial_scroll_all(bool enabled);
+void pmw3610_toggle_inertial_scroll_all(void);
+bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev);
+void pmw3610_set_vertical_scroll_direction_all(bool inverted);
+void pmw3610_toggle_vertical_scroll_direction_all(void);
+bool pmw3610_horizontal_scroll_direction_is_inverted(const struct device *dev);
+void pmw3610_set_horizontal_scroll_direction_all(bool inverted);
+void pmw3610_toggle_horizontal_scroll_direction_all(void);
+
 /** @brief Sensor specific attributes of PMW3610. */
+enum pmw3610_attribute {
+	PMW3610_ATTR_CPI,
+	PMW3610_ATTR_RUN_DOWNSHIFT_TIME,
+	PMW3610_ATTR_REST1_DOWNSHIFT_TIME,
+	PMW3610_ATTR_REST2_DOWNSHIFT_TIME,
+	PMW3610_ATTR_REST1_SAMPLE_TIME,
+	PMW3610_ATTR_REST2_SAMPLE_TIME,
+	PMW3610_ATTR_REST3_SAMPLE_TIME,
+};
+
 enum pmw3610_alt_attribute {
-
-	/** Sensor CPI for both X and Y axes. */
-	PMW3610_ALT_ATTR_CPI,
-
-	/** Entering time from Run mode to REST1 mode [ms]. */
-	PMW3610_ALT_ATTR_RUN_DOWNSHIFT_TIME,
-
-	/** Entering time from REST1 mode to REST2 mode [ms]. */
-	PMW3610_ALT_ATTR_REST1_DOWNSHIFT_TIME,
-
-	/** Entering time from REST2 mode to REST3 mode [ms]. */
-	PMW3610_ALT_ATTR_REST2_DOWNSHIFT_TIME,
-
-	/** Sampling frequency time during REST1 mode [ms]. */
-	PMW3610_ALT_ATTR_REST1_SAMPLE_TIME,
-
-	/** Sampling frequency time during REST2 mode [ms]. */
-	PMW3610_ALT_ATTR_REST2_SAMPLE_TIME,
-
-	/** Sampling frequency time during REST3 mode [ms]. */
-	PMW3610_ALT_ATTR_REST3_SAMPLE_TIME,
-
+	PMW3610_ALT_ATTR_CPI = PMW3610_ATTR_CPI,
+	PMW3610_ALT_ATTR_RUN_DOWNSHIFT_TIME = PMW3610_ATTR_RUN_DOWNSHIFT_TIME,
+	PMW3610_ALT_ATTR_REST1_DOWNSHIFT_TIME = PMW3610_ATTR_REST1_DOWNSHIFT_TIME,
+	PMW3610_ALT_ATTR_REST2_DOWNSHIFT_TIME = PMW3610_ATTR_REST2_DOWNSHIFT_TIME,
+	PMW3610_ALT_ATTR_REST1_SAMPLE_TIME = PMW3610_ATTR_REST1_SAMPLE_TIME,
+	PMW3610_ALT_ATTR_REST2_SAMPLE_TIME = PMW3610_ATTR_REST2_SAMPLE_TIME,
+	PMW3610_ALT_ATTR_REST3_SAMPLE_TIME = PMW3610_ATTR_REST3_SAMPLE_TIME,
 };
 
 #ifdef __cplusplus

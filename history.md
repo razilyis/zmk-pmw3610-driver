@@ -1,5 +1,19 @@
 # Development History
 
+## 2026-08-17
+
+### Add Dev-v0.4_inertial-scroll branch for ZMK v0.4 (Zephyr 4.1)
+
+- Created `Dev-v0.4_inertial-scroll` based on `main` (Zephyr 4.1 compatible with `pixart,pmw3610-alt` and `CONFIG_PMW3610_ALT`).
+- Ported inertial scrolling with gesture velocity estimation, flick attack/decay, duration limit, and fade-out.
+- Ported low-speed micro-motion stabilizer for smooth, drift-free pointer control.
+- Ported runtime behaviors and split layer/state sync:
+  - `pmw3610_inertia_toggle`
+  - `pmw3610_scroll_direction_toggle`
+  - `pmw3610_horizontal_scroll_direction_toggle`
+- Added backward-compatible DTS bindings supporting both `pixart,pmw3610-alt` and `pixart,pmw3610`.
+- Integrated Kconfig fallback macros to seamlessly support `CONFIG_PMW3610_ALT` and `CONFIG_PMW3610`.
+
 ## 2026-07-31
 
 ### Harden SPI timing, drift filtering, and pending motion
