@@ -144,12 +144,14 @@ enum pmw3610_alt_attribute {
   PMW3610_ALT_ATTR_REST3_SAMPLE_TIME,
 };
 
+void pmw3610_set_inertial_scroll_all(bool enabled);
+void pmw3610_set_vertical_scroll_direction_all(bool inverted);
+void pmw3610_set_horizontal_scroll_direction_all(bool inverted);
 void pmw3610_toggle_inertial_scroll_all(void);
 void pmw3610_toggle_vertical_scroll_direction_all(void);
 void pmw3610_toggle_horizontal_scroll_direction_all(void);
 void pmw3610_invert_scroll_all(bool invert);
 void pmw3610_invert_horizontal_scroll_all(bool invert);
-void pmw3610_set_inertial_scroll_all(bool enabled);
 bool pmw3610_inertial_scroll_is_enabled(const struct device *dev);
 bool pmw3610_vertical_scroll_direction_is_inverted(const struct device *dev);
 bool pmw3610_horizontal_scroll_direction_is_inverted(const struct device *dev);

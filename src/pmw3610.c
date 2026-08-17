@@ -1468,6 +1468,16 @@ void pmw3610_invert_horizontal_scroll_all(bool invert) {
   pmw3610_toggle_horizontal_scroll_direction_all();
 }
 
+void pmw3610_set_vertical_scroll_direction_all(bool inverted) {
+  ARG_UNUSED(inverted);
+  pmw3610_toggle_vertical_scroll_direction_all();
+}
+
+void pmw3610_set_horizontal_scroll_direction_all(bool inverted) {
+  ARG_UNUSED(inverted);
+  pmw3610_toggle_horizontal_scroll_direction_all();
+}
+
 void pmw3610_set_inertial_scroll_all(bool enabled) {
   ARG_UNUSED(enabled);
   pmw3610_toggle_inertial_scroll_all();

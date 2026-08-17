@@ -78,6 +78,7 @@ struct pixart_config {
   bool force_awake_4ms_mode;
   bool inertial_scroll;
   bool scroll_direction_toggle;
+  uint16_t inertial_scroll_decay_pct;
   uint16_t inertial_scroll_decay_basis_points;
   uint16_t inertial_scroll_interval_ms;
   uint16_t inertial_scroll_threshold;
