@@ -12,6 +12,7 @@
 #include <zephyr/pm/device.h>
 #include <zmk/keymap.h>
 #include <zmk/events/activity_state_changed.h>
+#include <zmk/events/layer_state_changed.h>
 #include "pmw3610.h"
 #include "pmw3610_control.h"
 
@@ -218,6 +219,12 @@ static void pmw3610_inertia_work_callback(struct k_work *work) {
       CONTAINER_OF(delayable, struct pixart_data, inertia_work);
   const struct device *dev = data->dev;
   const struct pixart_config *config = dev->config;
+
+  if (!pmw3610_inertial_scroll_is_enabled(dev)) {
+    pmw3610_stop_inertia(data);
+    pmw3610_reset_gesture_velocity(data);
+    return;
+  }
 
   int32_t vx = data->inertia_x;
   int32_t vy = data->inertia_y;
@@ -1071,3 +1078,22 @@ static int on_activity_state(const zmk_event_t *eh) {
 
 ZMK_LISTENER(zmk_pmw3610_idle_sleeper, on_activity_state);
 ZMK_SUBSCRIPTION(zmk_pmw3610_idle_sleeper, zmk_activity_state_changed);
+
+static int on_layer_state(const zmk_event_t *eh) {
+    struct zmk_layer_state_changed *ev = as_zmk_layer_state_changed(eh);
+    if (!ev) {
+        return 0;
+    }
+    for (size_t i = 0; i < PMW3610_DEVICE_COUNT; i++) {
+        const struct device *dev = pmw3610_devs[i];
+        if (!pmw3610_inertial_scroll_is_enabled(dev)) {
+            struct pixart_data *data = dev->data;
+            pmw3610_stop_inertia(data);
+            pmw3610_reset_gesture_velocity(data);
+        }
+    }
+    return 0;
+}
+
+ZMK_LISTENER(zmk_pmw3610_layer_listener, on_layer_state);
+ZMK_SUBSCRIPTION(zmk_pmw3610_layer_listener, zmk_layer_state_changed);
