@@ -133,9 +133,12 @@ bool pmw3610_inertial_scroll_is_enabled(const struct device *dev) {
   }
 
 #if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
-  uint8_t active_layer = zmk_keymap_highest_layer_active();
-  return pmw3610_layer_matches(active_layer, config->inertial_scroll_layers,
-                               config->inertial_scroll_layer_count);
+  for (size_t i = 0; i < config->inertial_scroll_layer_count; i++) {
+    if (zmk_keymap_layer_active(config->inertial_scroll_layers[i])) {
+      return true;
+    }
+  }
+  return false;
 #else
   for (size_t i = 0; i < config->inertial_scroll_layer_count; i++) {
     if (pmw3610_control_remote_layer_active(config->inertial_scroll_layers[i])) {
@@ -1104,10 +1107,32 @@ emit_pending_motion:
     // fetch report value
     int16_t rx = pmw3610_bounded_report_delta(data->dx, config);
     int16_t ry = pmw3610_bounded_report_delta(data->dy, config);
+
+    if (pmw3610_vertical_scroll_direction_is_inverted(dev)) {
+        if (config->vertical_scroll_uses_x_axis) {
+            rx = (rx == INT16_MIN) ? INT16_MAX : -rx;
+        } else {
+            ry = (ry == INT16_MIN) ? INT16_MAX : -ry;
+        }
+    }
+    if (pmw3610_horizontal_scroll_direction_is_inverted(dev)) {
+        if (config->vertical_scroll_uses_x_axis) {
+            ry = (ry == INT16_MIN) ? INT16_MAX : -ry;
+        } else {
+            rx = (rx == INT16_MIN) ? INT16_MAX : -rx;
+        }
+    }
+
     bool have_x = rx != 0;
     bool have_y = ry != 0;
 
     if (have_x || have_y) {
+        int64_t report_now = k_uptime_get();
+        bool inertia_active = pmw3610_inertial_scroll_is_enabled(dev);
+        if (inertia_active) {
+            pmw3610_stop_inertia(data);
+        }
+
         bool x_sent;
         bool y_sent;
         err = pmw3610_emit_input(dev, rx, ry, &x_sent, &y_sent);
@@ -1121,7 +1146,7 @@ emit_pending_motion:
         data->input_retry_pending =
             data->input_frame_open || data->dx != 0 || data->dy != 0;
         if (data->input_retry_pending && !data->input_retry_since_ms) {
-            data->input_retry_since_ms = k_uptime_get();
+            data->input_retry_since_ms = report_now;
         } else if (!data->input_retry_pending) {
             data->input_retry_since_ms = 0;
         }
@@ -1132,9 +1157,13 @@ emit_pending_motion:
 #endif
         if (err) {
             LOG_WRN("Failed to queue PMW3610 input: %d", err);
-        }
-        if (err || data->input_retry_pending) {
+            pmw3610_stop_inertia(data);
+            pmw3610_reset_gesture_velocity(data);
             return -EAGAIN;
+        }
+
+        if (inertia_active && pmw3610_inertial_scroll_is_enabled(dev)) {
+            pmw3610_update_inertia_from_motion(data, config, rx, ry, report_now);
         }
     }
 
