@@ -28,3 +28,15 @@ int pmw3610_control_convert_toggle(enum pmw3610_control_kind kind,
 int pmw3610_control_apply(enum pmw3610_control_kind kind, int32_t command,
                           int32_t value);
 bool pmw3610_control_remote_layer_active(uint8_t layer);
+
+static inline bool pmw3610_control_inertia_enabled(void) {
+  return pmw3610_control_get(PMW3610_CONTROL_INERTIA);
+}
+
+static inline bool pmw3610_control_vertical_scroll_inverted(void) {
+  return pmw3610_control_get(PMW3610_CONTROL_VERTICAL_DIRECTION);
+}
+
+static inline bool pmw3610_control_horizontal_scroll_inverted(void) {
+  return pmw3610_control_get(PMW3610_CONTROL_HORIZONTAL_DIRECTION);
+}

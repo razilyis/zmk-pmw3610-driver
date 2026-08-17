@@ -369,7 +369,9 @@ SYS_INIT(pmw3610_control_init, APPLICATION,
 #else
 
 bool pmw3610_control_get(enum pmw3610_control_kind kind) {
-  ARG_UNUSED(kind);
+  if (kind == PMW3610_CONTROL_INERTIA) {
+    return true;
+  }
   return false;
 }
 
@@ -377,7 +379,7 @@ int pmw3610_control_convert_toggle(enum pmw3610_control_kind kind,
                                    int32_t *command) {
   ARG_UNUSED(kind);
   ARG_UNUSED(command);
-  return -ENOTSUP;
+  return 0;
 }
 
 int pmw3610_control_apply(enum pmw3610_control_kind kind, int32_t command,
@@ -385,12 +387,12 @@ int pmw3610_control_apply(enum pmw3610_control_kind kind, int32_t command,
   ARG_UNUSED(kind);
   ARG_UNUSED(command);
   ARG_UNUSED(value);
-  return -ENOTSUP;
+  return 0;
 }
 
 bool pmw3610_control_remote_layer_active(uint8_t layer) {
   ARG_UNUSED(layer);
-  return false;
+  return (layer == 0);
 }
 
 #endif
