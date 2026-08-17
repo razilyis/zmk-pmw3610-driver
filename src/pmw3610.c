@@ -1,23 +1,14 @@
-/*
- * Copyright (c) 2022 The ZMK Contributors
- *
- * SPDX-License-Identifier: MIT
- */
-
-#if DT_HAS_COMPAT_STATUS_OKAY(pixart_pmw3610_alt)
 #define DT_DRV_COMPAT pixart_pmw3610_alt
-#else
-#define DT_DRV_COMPAT pixart_pmw3610
-#endif
 
-#include "pmw3610.h"
-#include "pmw3610_control.h"
+#include <zephyr/devicetree.h>
 #include <zephyr/init.h>
 #include <zephyr/input/input.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util_macro.h>
+#include "pmw3610.h"
+#include "pmw3610_control.h"
 #include <zmk/events/activity_state_changed.h>
 #include <zmk/keymap.h>
 
