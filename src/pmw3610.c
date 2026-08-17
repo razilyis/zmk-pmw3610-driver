@@ -1083,6 +1083,7 @@ static int on_activity_state(const zmk_event_t *eh) {
 ZMK_LISTENER(zmk_pmw3610_idle_sleeper, on_activity_state);
 ZMK_SUBSCRIPTION(zmk_pmw3610_idle_sleeper, zmk_activity_state_changed);
 
+#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 static int on_layer_state(const zmk_event_t *eh) {
     struct zmk_layer_state_changed *ev = as_zmk_layer_state_changed(eh);
     if (!ev) {
@@ -1101,3 +1102,4 @@ static int on_layer_state(const zmk_event_t *eh) {
 
 ZMK_LISTENER(zmk_pmw3610_layer_listener, on_layer_state);
 ZMK_SUBSCRIPTION(zmk_pmw3610_layer_listener, zmk_layer_state_changed);
+#endif
