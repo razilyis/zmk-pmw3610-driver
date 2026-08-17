@@ -8,7 +8,7 @@ This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/
 
 badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and the Zephyr PMW3610 driver to create a well-structured PMW3610 driver for ZMK — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. His work laid the foundation for trackball integration in ZMK. Deep respect and gratitude to badjeff and the contributors.
 
-このブランチはその実装をベースに、**ZMK v0.4 (Zephyr 4.1)** に対応し、慣性スクロール・低速スタビライザー・各種トグルBehaviorを追加したものです。
+このブランチは badjeff の高精度・低遅延なカーソル追従コードをベースに、**ZMK v0.4 (Zephyr 4.1)** 対応と**ドライバーサイド慣性スクロール・制御Behavior** を統合したものです。
 
 ---
 
@@ -19,13 +19,13 @@ badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zm
 - **Kconfig プレフィックス**: `CONFIG_PMW3610_ALT_*`（`CONFIG_PMW3610_*` も自動フォールバック）
 - **Zephyr 4.1 Input Subsystem**: 新しい入力基盤および Device Driver API に適合
 
-### 🟢 ドライバーサイド慣性スクロール
+### 🟢 最高精度の 1:1 カーソル追従性（通常ポインティング時）
+- 通常のカーソル操作時は、余分なフィルタや遅延処理を挟まず、badjeff 本家と全く同一のダイレクトな高速サンプリング（ゼロ遅延・完全な滑らかさ）で動作します。
+
+### 🟢 ドライバーサイド慣性スクロール（スクロールレイヤー時）
 - **心地よい滑り心地**: スクロールレイヤーでトラックボールをフリックした際、指を離した後も指数関数的な減速を伴ってなめらかにスクロールが継続します。
 - **ジェスチャー速度の正規化**: 最後の1サンプルだけでなく、レポート間隔で時間正規化した直近のフリック速度から慣性初速を算出。REST 復帰時の過剰な飛び出し（暴走）を防ぎつつ、素早いフリックの勢いを保持します。
 - **継続時間・フェード制御**: 最大持続時間（デフォルト: 1800ms）と終了前の線形フェードアウト（250ms）により、不自然な急停止のない自然な減速を実現。
-
-### 🟢 低速カーソル安定化 (`low-speed-stabilizer`)
-- 微細な手振れやセンサーの微小ノイズを検知・相殺。ポインタを止めたいときの意図しないカーソルブレを抑制し、精密なポインティングを可能にします。スクロールレイヤーでは自動的にバイパスされます。
 
 ### 🟢 リアルタイム制御ビヘイビア & Split同期
 - キーマップからいつでも慣性スクロールの ON/OFF、縦スクロール・横スクロールの正転/反転をトグル切り替え可能。
@@ -84,9 +84,6 @@ manifest:
         inertial-scroll-gain-pct = <130>;
         inertial-scroll-decay-pct = <99>;
 
-        /* 低速スタビライザー */
-        low-speed-stabilizer;
-
         /* 省電力制御 */
         force-awake;          /* ACTIVE 時はセンサーを常時起動 */
 
@@ -124,8 +121,8 @@ CONFIG_PMW3610_ALT_SMART_ALGORITHM=y
 | `x-input-code` | int | (必須) | X 軸の入力コード |
 | `y-input-code` | int | (必須) | Y 軸の入力コード |
 | `motion-threshold` | int | 1 | ドリフトフィルタ閾値。XとYの絶対値が両方ともこの値以下のサンプルを破棄。`0` で無効 |
-| `max-motion-delta` | int | 512 | XまたはYの絶対値がこの値以上の単発サンプルを破棄し、異常なカーソルジャンプや慣性生成を防ぐ（1〜2048） |
-| `max-report-delta` | int | 2047 | 蓄積後に1レポートで送る絶対値を制限し、超過分を後続レポートとして放出せず破棄する（1〜2047） |
+| `max-motion-delta` | int | 512 | XまたはYの絶対値がこの値以上の単発サンプルを破棄し、異常なカーソルジャンプを防ぐ（1〜2048） |
+| `max-report-delta` | int | 2047 | 蓄積後に1レポートで送る絶対値を制限（1〜2047） |
 | `swap-xy` | boolean | — | XY 軸を入れ替える |
 | `invert-x` | boolean | — | X 軸を反転する |
 | `invert-y` | boolean | — | Y 軸を反転する |
@@ -154,14 +151,6 @@ CONFIG_PMW3610_ALT_SMART_ALGORITHM=y
 | `scroll-direction-toggle` | boolean | — | `inertial-scroll`を使わないスクロール専用センサーも方向トグルの対象にする |
 | `vertical-scroll-uses-x-axis` | boolean | false | 90度回転して搭載したセンサーで、生のX軸を縦スクロール方向トグルの対象にする |
 
-### 低速カーソル安定化
-
-| プロパティ | 型 | デフォルト | 説明 |
-|---|---|---|---|
-| `low-speed-stabilizer` | boolean | — | 低速マイクロモーション安定化を有効化する |
-| `low-speed-stabilizer-threshold` | int | 1 | マイクロモーションとして扱う最大絶対値 |
-| `low-speed-stabilizer-timeout-ms` | int | 30 | 無入力後に方向履歴をリセットする時間。停止後の最初の微小入力は保留せず出力する |
-
 ---
 
 ## 制御Behavior（トグルキー）
@@ -174,44 +163,36 @@ CONFIG_PMW3610_ALT_SMART_ALGORITHM=y
 | `&pmw3610_scroll_direction_toggle` | 縦スクロール方向（正転 / 反転）をトグル切り替え |
 | `&pmw3610_horizontal_scroll_direction_toggle` | 横スクロール方向（正転 / 反転）をトグル切り替え |
 
-### 使用方法
+### [Keymap Editor (nickcoutsos)](https://github.com/nickcoutsos/keymap-editor) での使用
 
-1. **通常ビルドの場合**:
-   `.keymap` ファイルの先頭で各 dtsi を include します：
-   ```dts
-   #include <behaviors/pmw3610_inertia_toggle.dtsi>
-   #include <behaviors/pmw3610_scroll_direction_toggle.dtsi>
-   #include <behaviors/pmw3610_horizontal_scroll_direction_toggle.dtsi>
-   ```
+Web 版 Keymap Editor でビヘイビアを UI 選択できるようにするため、`.keymap` の `behaviors { ... }` ブロック内に定義します：
 
-2. **[Keymap Editor (nickcoutsos)](https://github.com/nickcoutsos/keymap-editor) をお使いの場合**:
-   Web 版 Keymap Editor は外部 west モジュールを直接解析しないため、`.keymap` の `behaviors { ... }` ブロック内に直接ビヘイビアノードを定義することで、GUI 上に選択肢が表示されます：
-   ```dts
-   / {
-       behaviors {
-           pmw3610_inertia_toggle: pmw3610_inertia_toggle {
-               compatible = "zmk,behavior-pmw3610-inertia-toggle";
-               #binding-cells = <0>;
-               label = "PMW3610_INERTIA_TOGGLE";
-               display-name = "PMW3610 Inertia Toggle";
-           };
+```dts
+/ {
+    behaviors {
+        pmw3610_inertia_toggle: pmw3610_inertia_toggle {
+            compatible = "zmk,behavior-pmw3610-inertia-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_INERTIA_TOGGLE";
+            display-name = "PMW3610 Inertia Toggle";
+        };
 
-           pmw3610_scroll_direction_toggle: pmw3610_scroll_direction_toggle {
-               compatible = "zmk,behavior-pmw3610-scroll-direction-toggle";
-               #binding-cells = <0>;
-               label = "PMW3610_SCROLL_DIRECTION_TOGGLE";
-               display-name = "PMW3610 Scroll Direction Toggle";
-           };
+        pmw3610_scroll_direction_toggle: pmw3610_scroll_direction_toggle {
+            compatible = "zmk,behavior-pmw3610-scroll-direction-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_SCROLL_DIRECTION_TOGGLE";
+            display-name = "PMW3610 Scroll Direction Toggle";
+        };
 
-           pmw3610_horizontal_scroll_direction_toggle: pmw3610_horizontal_scroll_direction_toggle {
-               compatible = "zmk,behavior-pmw3610-horizontal-scroll-direction-toggle";
-               #binding-cells = <0>;
-               label = "PMW3610_HORIZONTAL_SCROLL_DIRECTION_TOGGLE";
-               display-name = "PMW3610 Horizontal Scroll Direction Toggle";
-           };
-       };
-   };
-   ```
+        pmw3610_horizontal_scroll_direction_toggle: pmw3610_horizontal_scroll_direction_toggle {
+            compatible = "zmk,behavior-pmw3610-horizontal-scroll-direction-toggle";
+            #binding-cells = <0>;
+            label = "PMW3610_HORIZONTAL_SCROLL_DIRECTION_TOGGLE";
+            display-name = "PMW3610 Horizontal Scroll Direction Toggle";
+        };
+    };
+};
+```
 
 ---
 

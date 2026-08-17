@@ -8,7 +8,7 @@ This module is based on [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/
 
 badjeff built upon [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and the [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c) to create a well-structured PMW3610 driver for ZMK — with split peripheral support, per-sensor DTS configuration, and shared SPI bus compatibility. Deep respect and gratitude to badjeff and all original contributors.
 
-This branch brings full **ZMK v0.4 (Zephyr 4.1)** support along with driver-side inertial scrolling, low-speed micro-motion stabilization, and runtime toggle behaviors.
+This branch brings full **ZMK v0.4 (Zephyr 4.1)** support along with driver-side inertial scrolling and runtime toggle behaviors while preserving badjeff's native 1:1 ultra-smooth pointer tracking.
 
 ---
 
@@ -19,13 +19,13 @@ This branch brings full **ZMK v0.4 (Zephyr 4.1)** support along with driver-side
 - Kconfig prefix: `CONFIG_PMW3610_ALT_*` (with fallback to `CONFIG_PMW3610_*`).
 - Integrated with Zephyr 4.1 input subsystem and driver APIs.
 
-### 🟢 Driver-Side Inertial Scrolling
+### 🟢 Buttery Smooth 1:1 Pointer Tracking
+- Normal cursor motion passes directly through without artificial filtering or latency, providing true 1:1 ultra-smooth tracking identical to badjeff's original driver.
+
+### 🟢 Driver-Side Inertial Scrolling (On Scroll Layers)
 - **Smooth Inertia**: Emits natural, exponential-decay scrolling when trackball is flicked on designated scroll layers.
 - **Time-Normalized Gesture Velocity**: Velocity is estimated over time intervals to avoid sudden runaway velocity when waking from REST mode.
 - **Fade & Duration Bounds**: Configurable maximum duration (default 1800ms) with a linear fade-out (250ms).
-
-### 🟢 Low-Speed Stabilizer (`low-speed-stabilizer`)
-- Stabilizes slow, precise pointer movement by filtering micro-jitter while preserving true intentional movement. Automatically bypassed on scroll layers.
 
 ### 🟢 Runtime Control Behaviors & Split Sync
 - Zero-parameter behaviors to toggle features from keymap:
@@ -82,9 +82,6 @@ manifest:
         inertial-scroll-layers = <6 7>;
         inertial-scroll-gain-pct = <130>;
         inertial-scroll-decay-pct = <99>;
-
-        /* Low speed micro-motion stabilizer */
-        low-speed-stabilizer;
 
         /* Power management */
         force-awake;
